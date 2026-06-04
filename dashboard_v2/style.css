@@ -1,0 +1,337 @@
+/* ═══════════════════════════════════════════════════════════════
+   Visual Audio Overlay — dashboard_v2
+   Tokens extracted from Figma (VisualAudioOverlay, node 5:2).
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Self-hosted design font — bundled in fonts/ so it works offline in the .exe */
+@font-face {
+    font-family: "Google Sans Flex";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("fonts/GoogleSansFlex-400.ttf") format("truetype");
+}
+@font-face {
+    font-family: "Google Sans Flex";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("fonts/GoogleSansFlex-500.ttf") format("truetype");
+}
+@font-face {
+    font-family: "Google Sans Flex";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url("fonts/GoogleSansFlex-700.ttf") format("truetype");
+}
+@font-face {
+    font-family: "Google Sans Flex";
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url("fonts/GoogleSansFlex-800.ttf") format("truetype");
+}
+
+:root {
+    --bg: #262525;
+    --card: #1D1D1D;
+    --accent: #009DFF;        /* slider/border accent */
+    --glow: #1BAFA9;          /* blurred corner glow */
+    --text: #ffffff;
+    --text-dim: #9a9a9a;
+    --track: #454545;         /* faint slider/preview base line */
+    --radius-card: 20px;
+    --radius-pill: 22px;
+    --font: "Google Sans Flex", system-ui, sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font);
+}
+
+html, body {
+    background: var(--bg);
+    color: var(--text);
+    height: 100%;
+    overflow: hidden;          /* never scroll — content fits the window */
+}
+
+/* Teal corner glow (top-left), matching the blurred ellipse in Figma */
+body::before {
+    content: "";
+    position: fixed;
+    top: -80px;
+    left: -80px;
+    width: 320px;
+    height: 280px;
+    background: radial-gradient(circle, rgba(27, 175, 169, 0.55), transparent 70%);
+    filter: blur(60px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+#app {
+    position: relative;
+    z-index: 1;
+    height: 100vh;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 16px 36px 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ── Brand ─────────────────────────────────────────────────────── */
+.brand {
+    flex: none;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    margin-bottom: 14px;
+}
+.brand .cap {
+    font-weight: 800;
+    font-size: 23px;
+}
+
+/* ── Layout rows ───────────────────────────────────────────────── */
+.row {
+    display: grid;
+    grid-template-columns: 273fr 591fr 273fr;
+    gap: 24px;
+    align-items: stretch;      /* cards share the row height */
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-bottom: 20px;
+}
+
+/* ── Cards ─────────────────────────────────────────────────────── */
+.card {
+    background: var(--card);
+    border-radius: var(--radius-card);
+    padding: 20px 26px;
+    box-shadow: 0 4px 8px 2px rgba(0, 0, 0, 0.25);
+    min-height: 0;
+    overflow: hidden;
+}
+.card--custom {
+    flex: none;
+}
+
+.card-title {
+    font-size: 26px;
+    font-weight: 800;
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.group-title {
+    font-size: 18px;
+    font-weight: 500;
+    margin-bottom: 14px;
+}
+
+/* ── Generic field (label + control) ───────────────────────────── */
+.field { margin-bottom: 18px; }
+
+.field-label,
+.control-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.control-head .value {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.icon {
+    width: 22px;
+    height: 22px;
+    filter: brightness(0) invert(1);
+    flex: none;
+}
+.icon--rot { transform: rotate(90deg); }
+
+.device-name { font-size: 15px; margin-bottom: 4px; }
+.device-sub { font-size: 14px; color: var(--text-dim); }
+
+/* ── Selects (pill dropdowns) ──────────────────────────────────── */
+.select-wrap { position: relative; display: inline-block; }
+.select-wrap--grow { flex: 1 1 auto; }
+
+.select {
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-pill);
+    padding: 9px 38px 9px 18px;
+    font-size: 15px;
+    cursor: pointer;
+    background-image: url("icons/Caret_Down_SM.svg");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 16px;
+    box-shadow: 0 4px 8px 2px rgba(0, 0, 0, 0.25);
+}
+.select:focus { outline: none; }
+.select:hover { background-color: #2a2a2a; }
+
+/* ── Sliders (single) ──────────────────────────────────────────── */
+.slider {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 2px;
+    background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--fill, 30%), var(--track) var(--fill, 30%), var(--track) 100%);
+    border-radius: 2px;
+    outline: none;
+}
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+/* ── Dual-handle range (frequency) ─────────────────────────────── */
+.dualrange {
+    position: relative;
+    height: 16px;
+    width: 100%;
+}
+.dualrange-track,
+.dualrange-fill {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 2px;
+    border-radius: 2px;
+}
+.dualrange-track { left: 0; right: 0; background: var(--track); }
+.dualrange-fill { background: var(--accent); }
+
+.dualrange-input {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 16px;
+    margin: 0;
+    background: none;
+    pointer-events: none;        /* track ignores clicks; thumbs re-enable */
+    -webkit-appearance: none;
+    appearance: none;
+}
+.dualrange-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    pointer-events: auto;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: none;
+}
+
+/* ── Preset row (select + add/delete) ──────────────────────────── */
+.preset-row { display: flex; align-items: center; gap: 10px; }
+
+.icon-btn {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    background: var(--card);
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 4px 8px 2px rgba(0, 0, 0, 0.25);
+}
+.icon-btn:hover { background: #2a2a2a; }
+.icon-btn .icon { width: 18px; height: 18px; }
+
+/* ── Settings two-column grid ──────────────────────────────────── */
+.settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+}
+.control { margin-bottom: 16px; }
+
+/* ── RADAR card ────────────────────────────────────────────────── */
+.status-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+}
+.status-dot--off { background: #FF0000; color: #FF0000; }
+.status-dot--on  { background: #1FCB4F; color: #1FCB4F; }
+
+.btn-toggle {
+    width: 100%;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-pill);
+    padding: 11px 18px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 4px 8px 2px rgba(0, 0, 0, 0.25);
+    margin-bottom: 8px;
+}
+.btn-toggle:hover { background: #2a2a2a; }
+.btn-toggle.is-active { border-color: #1FCB4F; }
+
+/* ── CUSTOMIZATION ─────────────────────────────────────────────── */
+.custom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+}
+.custom-col--preview { justify-self: center; }
+
+/* Color swatch */
+.color-block { display: flex; align-items: center; gap: 16px; }
+.color-input {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 96px;
+    height: 96px;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    background: none;
+    padding: 0;
+}
+.color-input::-webkit-color-swatch-wrapper { padding: 0; }
+.color-input::-webkit-color-swatch { border: none; border-radius: 14px; }
+.color-readout { display: flex; flex-direction: column; gap: 6px; }
+.color-hex { font-size: 15px; font-weight: 500; }
+.color-rgb { font-size: 13px; color: var(--text-dim); }
+
+#preview-canvas {
+    width: 150px;
+    height: 150px;
+}

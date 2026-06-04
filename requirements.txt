@@ -1,0 +1,4 @@
+PyQt6>=6.11
+PyQt6-WebEngine>=6.11
+numpy>=2.2
+soundcard>=0.4.5

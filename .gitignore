@@ -1,0 +1,32 @@
+# ── Secrets / credentials — never commit (public repo) ──
+.auth_cache.json
+# auth.py: contains a Supabase key + login logic; unused by v2
+auth.py
+
+# ── Local dev / notes / assets not needed to run v2 ──
+handoff.md
+feedback.md
+design/
+*.png
+profiles.json
+# legacy UI; v2 lives in dashboard_v2/
+dashboard/
+.claude/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# ── PyInstaller build output ──
+dist/
+build/
+
+# ── Editor / OS ──
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

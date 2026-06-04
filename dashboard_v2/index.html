@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Audio Overlay</title>
+    <!-- qwebchannel.js is served by Qt at this special URL. -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <!-- Font (Google Sans Flex) is self-hosted in fonts/ via @font-face in style.css,
+         so it works offline in the packaged .exe — no network/CDN dependency. -->
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- ── Brand ─────────────────────────────────────────────── -->
+        <h1 class="brand">
+            <span class="cap">V</span>isual <span class="cap">A</span>udio <span class="cap">O</span>verlay
+        </h1>
+
+        <!-- ── Top row: HARDWARE · SETTINGS · RADAR ──────────────── -->
+        <div class="row">
+
+            <!-- HARDWARE -->
+            <section class="card card--hardware">
+                <h2 class="card-title">HARDWARE</h2>
+
+                <div class="field">
+                    <div class="field-label">
+                        <img src="icons/monitor.svg" class="icon" alt="">
+                        <span>Monitor</span>
+                    </div>
+                    <div class="select-wrap">
+                        <select id="monitor-select" class="select" onchange="AR.setMonitor(this.value)"></select>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <div class="field-label">
+                        <img src="icons/headphone.svg" class="icon" alt="">
+                        <span>Audio Device</span>
+                    </div>
+                    <div id="device-name" class="device-name">No device detected</div>
+                    <div id="device-channels" class="device-sub"></div>
+                </div>
+            </section>
+
+            <!-- SETTINGS -->
+            <section class="card card--settings">
+                <h2 class="card-title">SETTINGS</h2>
+
+                <div class="settings-grid">
+                    <!-- Left column -->
+                    <div class="settings-col">
+                        <h3 class="group-title">Sensitivity</h3>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Text_Align_Center.svg" class="icon icon--rot" alt="">
+                                <span>Sensitivity</span>
+                                <span class="value" id="sensitivity-val">0.0050</span>
+                            </div>
+                            <input type="range" class="slider" id="sensitivity" min="1" max="500" value="50"
+                                oninput="AR.setSensitivity(this.value)">
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Volume_Max.svg" class="icon" alt="">
+                                <span>Gain / Boost</span>
+                                <span class="value" id="gain-val">1.0x</span>
+                            </div>
+                            <input type="range" class="slider" id="gain" min="10" max="500" value="10"
+                                oninput="AR.setGain(this.value)">
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Slider_03.svg" class="icon" alt="">
+                                <span>Preset</span>
+                            </div>
+                            <div class="preset-row">
+                                <div class="select-wrap select-wrap--grow">
+                                    <select id="preset-select" class="select"
+                                        onchange="AR.applyPreset(this.value)"></select>
+                                </div>
+                                <button class="icon-btn" title="Add preset" onclick="AR.addPreset()">
+                                    <img src="icons/Add_Plus.svg" class="icon" alt="Add">
+                                </button>
+                                <button class="icon-btn" title="Delete preset" onclick="AR.deletePreset()">
+                                    <img src="icons/Trash_Full.svg" class="icon" alt="Delete">
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right column -->
+                    <div class="settings-col">
+                        <h3 class="group-title">Frequency</h3>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Text_Align_Center.svg" class="icon icon--rot" alt="">
+                                <span>Frequency</span>
+                                <span class="value" id="freq-val">100–900 Hz</span>
+                            </div>
+                            <!-- Dual-handle range (low + high), built in JS -->
+                            <div class="dualrange" id="freq-range"
+                                data-min="20" data-max="20000" data-low="100" data-high="900">
+                                <div class="dualrange-track"></div>
+                                <div class="dualrange-fill"></div>
+                                <input type="range" class="dualrange-input" id="freq-low"
+                                    min="20" max="20000" value="100">
+                                <input type="range" class="dualrange-input" id="freq-high"
+                                    min="20" max="20000" value="900">
+                            </div>
+                        </div>
+
+                        <div class="control">
+                            <div class="control-head">
+                                <img src="icons/Volume_Max.svg" class="icon" alt="">
+                                <span>Max Amplitude</span>
+                                <span class="value" id="max-amp-val">1.00</span>
+                            </div>
+                            <input type="range" class="slider" id="max-amp" min="1" max="100" value="100"
+                                oninput="AR.setMaxAmp(this.value)">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RADAR -->
+            <section class="card card--radar">
+                <h2 class="card-title">
+                    RADAR
+                    <span id="status-dot" class="status-dot status-dot--off"></span>
+                </h2>
+
+                <div class="field">
+                    <div class="field-label"><span>Start / Stop</span></div>
+                    <button id="btn-toggle" class="btn-toggle" onclick="AR.toggleRadar()">Start</button>
+                    <div id="status-text" class="device-sub">Radar stopped</div>
+                </div>
+
+                <div class="field">
+                    <div class="field-label"><span>Program</span></div>
+                    <div class="select-wrap">
+                        <select id="program-select" class="select" onchange="AR.setProgram(this.value)"></select>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
+        <section class="card card--custom">
+            <h2 class="card-title">CUSTOMIZATION</h2>
+
+            <div class="custom-grid">
+                <!-- Color -->
+                <div class="custom-col">
+                    <h3 class="group-title">Color</h3>
+                    <div class="color-block">
+                        <!-- Native color input drives the accent; styled as a swatch -->
+                        <input type="color" id="accent-color" class="color-input" value="#9751F2"
+                            oninput="AR.setAccentColor(this.value)">
+                        <div class="color-readout">
+                            <span class="color-hex" id="color-hex">#9751F2</span>
+                            <span class="color-rgb" id="color-rgb">151, 81, 242</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Thickness -->
+                <div class="custom-col">
+                    <h3 class="group-title">Thickness</h3>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Stroke</span>
+                            <span class="value" id="thickness-val">6 px</span>
+                        </div>
+                        <input type="range" class="slider" id="thickness" min="1" max="20" value="6"
+                            oninput="AR.setThickness(this.value)">
+                    </div>
+                </div>
+
+                <!-- Preview -->
+                <div class="custom-col custom-col--preview">
+                    <h3 class="group-title">Preview</h3>
+                    <canvas id="preview-canvas" width="150" height="150"></canvas>
+                </div>
+            </div>
+        </section>
+
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
