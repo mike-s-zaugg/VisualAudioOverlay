@@ -1,20 +1,24 @@
-import sys
 import ctypes
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 
 class OverlayRadar(QWidget):
+    positionChanged = pyqtSignal(int, int)
+
     def __init__(self):
         super().__init__()
         
         self.setWindowTitle("Audio Radar Overlay")
-        self.setWindowFlags(
+        self.base_window_flags = (
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.WindowTransparentForInput |
             Qt.WindowType.Tool
         )
+        self.drag_enabled = False
+        self.drag_start_global = None
+        self.drag_start_window = None
+        self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         self.resize(300, 300)
@@ -26,6 +30,32 @@ class OverlayRadar(QWidget):
         self.decay_timer = QTimer(self)
         self.decay_timer.timeout.connect(self.decay_signal)
         self.decay_timer.start(30)
+
+    def _apply_window_flags(self):
+        flags = self.base_window_flags
+        if not self.drag_enabled:
+            flags |= Qt.WindowType.WindowTransparentForInput
+        self.setWindowFlags(flags)
+
+    def set_drag_enabled(self, enabled):
+        enabled = bool(enabled)
+        if self.drag_enabled == enabled:
+            return
+
+        was_visible = self.isVisible()
+        pos = self.pos()
+        self.drag_enabled = enabled
+        self.drag_start_global = None
+        self.drag_start_window = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self._apply_window_flags()
+        self.move(pos)
+
+        if was_visible:
+            self.show()
+            self.raise_()
+            self._remove_win11_border()
+        self.update()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -69,6 +99,36 @@ class OverlayRadar(QWidget):
     def set_stroke_width(self, width):
         self.stroke_width = width
         self.update()
+
+    def mousePressEvent(self, event):
+        if not self.drag_enabled or event.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+
+        self.drag_start_global = event.globalPosition().toPoint()
+        self.drag_start_window = self.pos()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if not self.drag_enabled or self.drag_start_global is None or self.drag_start_window is None:
+            return super().mouseMoveEvent(event)
+
+        delta = event.globalPosition().toPoint() - self.drag_start_global
+        new_pos = self.drag_start_window + delta
+        self.move(new_pos)
+        self.positionChanged.emit(new_pos.x(), new_pos.y())
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if not self.drag_enabled or event.button() != Qt.MouseButton.LeftButton:
+            return super().mouseReleaseEvent(event)
+
+        self.drag_start_global = None
+        self.drag_start_window = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        pos = self.pos()
+        self.positionChanged.emit(pos.x(), pos.y())
+        event.accept()
         
     def decay_signal(self):
         decay_rate = 0.04
@@ -99,6 +159,11 @@ class OverlayRadar(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if self.drag_enabled:
+            # Layered windows can be hard to hit-test on fully transparent pixels.
+            # A nearly invisible fill makes the whole radar box draggable in setup mode.
+            painter.fillRect(self.rect(), QColor(255, 255, 255, 8))
         
         width = self.width()
         height = self.height()
@@ -132,3 +197,10 @@ class OverlayRadar(QWidget):
             
             rect = QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
             painter.drawArc(rect, start_angle_16, span_angle_16)
+
+        if self.drag_enabled:
+            setup_pen = QPen(QColor(255, 255, 255, 120))
+            setup_pen.setWidth(1)
+            setup_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(setup_pen)
+            painter.drawEllipse(center, radius + 8, radius + 8)

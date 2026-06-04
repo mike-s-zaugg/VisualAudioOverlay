@@ -11,6 +11,7 @@ design/
 # but DO track the README screenshot
 !docs/screenshot.png
 profiles.json
+settings.json
 # legacy UI; v2 lives in dashboard_v2/
 dashboard/
 .claude/

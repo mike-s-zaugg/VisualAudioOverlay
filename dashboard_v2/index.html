@@ -150,6 +150,25 @@
                         <select id="program-select" class="select" onchange="AR.setProgram(this.value)"></select>
                     </div>
                 </div>
+
+                <div class="field field--position">
+                    <div class="field-label">
+                        <span>Position</span>
+                        <span class="value" id="position-val">0, 0</span>
+                    </div>
+                    <button id="btn-move" class="btn-toggle btn-toggle--small" onclick="AR.toggleMoveMode()">Move</button>
+                    <div class="nudge-grid">
+                        <span></span>
+                        <button class="nudge-btn" title="Up" onclick="AR.nudgeOverlay(0, -8)">&uarr;</button>
+                        <span></span>
+                        <button class="nudge-btn" title="Left" onclick="AR.nudgeOverlay(-8, 0)">&larr;</button>
+                        <button class="nudge-btn nudge-btn--wide" title="Center" onclick="AR.resetOverlay()">Center</button>
+                        <button class="nudge-btn" title="Right" onclick="AR.nudgeOverlay(8, 0)">&rarr;</button>
+                        <span></span>
+                        <button class="nudge-btn" title="Down" onclick="AR.nudgeOverlay(0, 8)">&darr;</button>
+                        <span></span>
+                    </div>
+                </div>
             </section>
         </div>
 
