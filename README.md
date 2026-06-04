@@ -1,32 +1,84 @@
-# Visual Audio Overlay
+<h1 align="center">Visual Audio Overlay</h1>
 
-A Windows desktop app that captures system audio, detects the **direction** a
-sound is coming from (stereo L/R balance or 5.1 surround), and draws a
-transparent, always-on-top **radar overlay** of directional "blips" — aimed at
-FPS footstep awareness and accessibility.
+<p align="center">
+  <b>See what you can't hear.</b><br>
+  An accessibility overlay that turns in-game sound into a real-time visual radar,
+  built for gamers with single-sided deafness (SSD) or hearing loss.
+</p>
 
-If this project helps you, you can support development here:
-☕ **[Buy Me a Coffee](https://buymeacoffee.com/mikezaugg)**
+<p align="center">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D6">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB">
+  <img alt="License" src="https://img.shields.io/badge/license-All%20Rights%20Reserved-red">
+  <img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange">
+</p>
 
-## Architecture
+<p align="center">
+  <img src="docs/screenshot.png" alt="Visual Audio Overlay control panel" width="100%">
+</p>
 
-- **`main.py`** — app entry. Hosts the control panel (an HTML/JS dashboard in a
-  `QWebEngineView`) and the overlay window. A `Bridge` object is exposed to JS as
-  `window.bridge` via QWebChannel — the full JS↔Python API.
-- **`audio_capture.py`** — `AudioCaptureThread`: records loopback audio (48 kHz),
-  applies an FFT band-pass, and computes angle + intensity.
-- **`overlay.py`** — `OverlayRadar`: frameless, transparent, click-through window
-  that draws decaying accent-coloured arcs.
-- **`dashboard_v2/`** — the UI (HTML/CSS/JS, icons, self-hosted font).
+---
 
-## Run (development)
+## What it is
+
+Visual Audio Overlay listens to your PC's audio and draws a sleek, transparent,
+Fortnite-style circular radar on top of your game. When a sound happens, an arc
+lights up in the direction it came from, so you can *see* footsteps, gunshots,
+reloads, and ability cues the instant they play.
+
+It runs as a two-part app: a control panel you keep on a second monitor, and the
+radar overlay that floats over your game on your main screen.
+
+## Who it's for
+
+- Players with **single-sided deafness** or **hearing loss** who lose directional audio.
+- Anyone gaming with one earbud in, or in a quiet household, who still wants positional awareness.
+- Competitive players who want footsteps and other key cues filtered out from background noise.
+
+## Features
+
+- **Directional radar overlay.** Transparent, always-on-top, click-through. Arcs
+  fade in and out in the direction of each sound.
+- **Game-specific presets.** Built-in frequency band-pass filters (CS2, Valorant,
+  Fortnite, and more) isolate footsteps and ignore useless low-end rumble.
+- **Smart audio boost.** Amplifies quiet, distant sounds so faint cues still register.
+- **Stereo and surround.** 7.1 / multi-channel headsets unlock 360 degree front/back
+  detection; stereo headsets run in left/right mode automatically.
+- **Saveable presets.** Store per-game sensitivities and filter setups and switch in one click.
+- **Full customization.** Pick the radar's accent color and line thickness, with a
+  live preview that matches exactly what shows up in game.
+- **Non-intrusive by design.** It does not inject into game memory or modify any game
+  files. It simply reads the standard Windows audio output (WASAPI loopback).
+
+## How it works
+
+The app captures your system's audio output (the same signal going to your
+headphones) and analyzes the balance between channels to estimate the direction
+of each sound. That direction is drawn as an arc on the radar. Because it only
+reads audio you are already playing, there is no interaction with the game itself.
+
+> **Note on detection range:** front/back separation depends on your headset. A
+> true 7.1 / 8-channel device enables full 360 degree detection. A stereo device
+> can only resolve left vs. right.
+
+## Getting started (from source)
 
 ```bash
+git clone https://github.com/mike-s-zaugg/VisualAudioOverlay.git
+cd VisualAudioOverlay
 pip install -r requirements.txt
 python main.py
 ```
 
-Requires **Python 3.10+** and **Windows 10 build 19041+** (for audio loopback).
+Requires **Windows 10 (build 19041+)** and **Python 3.10+**.
+
+### Quick start
+
+1. Launch the app and pick your **Monitor** (where the radar appears).
+2. Choose a **Preset** that matches your game, or tune Sensitivity, Gain, and the
+   Frequency range yourself.
+3. Set your radar **Color** and **Thickness** in Customization.
+4. Hit **Start** in the Radar panel. The overlay appears on your selected monitor.
 
 ## Build a standalone .exe
 
@@ -35,15 +87,43 @@ pip install pyinstaller
 pyinstaller AudioRadar.spec
 ```
 
-The `.spec` bundles `dashboard_v2/` (UI, icons, font) so the executable renders
-correctly offline. Output lands in `dist/`.
+The build bundles the full UI, icons, and font, so the executable runs offline
+with no extra setup. Output lands in `dist/`.
 
-> Note: QtWebEngine in a one-file build can be finicky; if the window is blank,
-> prefer a one-dir build.
+> If a one-file build shows a blank window (a known QtWebEngine quirk), use a
+> one-directory build instead.
 
 ## Roadmap
 
-- **Per-application capture** — pick a specific program (e.g. the game) so other
-  apps like Discord are ignored. Planned via the Windows WASAPI Process Loopback
-  API (INCLUDE mode).
-- Editable presets persisted to disk.
+- **Per-application capture.** Pick a single program (your game) so other apps like
+  Discord voice chat are ignored. Planned via the Windows WASAPI process loopback API.
+- **Editable presets** saved to disk.
+- **Haptic output.** Drive ButtKicker-style shakers from the strongest audio cue.
+
+## Project layout
+
+| File | Role |
+|------|------|
+| `main.py` | App entry. Hosts the control panel and overlay, exposes the JS/Python bridge. |
+| `audio_capture.py` | Captures loopback audio, band-pass filters it, computes direction + intensity. |
+| `overlay.py` | The transparent, click-through radar window. |
+| `dashboard_v2/` | The control-panel UI (HTML/CSS/JS, icons, bundled font). |
+
+## Support
+
+Visual Audio Overlay is free. If it helps you, you can support development here:
+
+**[Buy Me a Coffee](https://buymeacoffee.com/mikezaugg)**
+
+## Disclaimer
+
+This tool reads only standard Windows audio output and does not read or modify
+game memory or files. It is intended as an accessibility aid. Anti-cheat policies
+vary between games, so use it at your own discretion.
+
+## License
+
+Copyright (c) 2026 Mike Zaugg. **All rights reserved.** The source is published
+for transparency and personal use of the released app only. You may not copy,
+modify, redistribute, sell, or reuse the code or the application without written
+permission. See the [LICENSE](LICENSE) for the full terms.

@@ -35,7 +35,7 @@ class OverlayRadar(QWidget):
         """
         Windows 11 applies rounded corners and a border/shadow to ALL windows,
         including frameless ones. This opts out via the DWM API.
-        Safe on non-Windows — the try/except swallows it silently.
+        Safe on non-Windows - the try/except swallows it silently.
         """
         try:
             hwnd = int(self.winId())

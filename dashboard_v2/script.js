@@ -1,5 +1,5 @@
 /**
- * Visual Audio Overlay — dashboard_v2 frontend
+ * Visual Audio Overlay - dashboard_v2 frontend
  * ═══════════════════════════════════════════════════════════════════════
  * Talks to the Python `Bridge` (main.py) over QWebChannel.
  *   JS → Python : window.bridge.method(arg)
@@ -12,9 +12,9 @@
  *   set_stroke_width(int), save_profile(jsonStr), delete_profile(str),
  *   request_initial_data()
  *
- * NEW (backend TODO — guarded so the UI works before they exist):
- *   set_program(str)            — per-app capture target ([[per-app-capture]])
- *   programsChanged(jsonStr)    — list of running audio programs
+ * NEW (backend TODO - guarded so the UI works before they exist):
+ *   set_program(str)            - per-app capture target ([[per-app-capture]])
+ *   programsChanged(jsonStr)    - list of running audio programs
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -31,7 +31,7 @@ function initBridge() {
             bridge.profilesChanged.connect(onProfilesChanged);
             bridge.monitorsChanged.connect(onMonitorsChanged);
             bridge.presetsChanged.connect(onPresetsChanged);
-            // Optional new signal — only connect if the backend provides it.
+            // Optional new signal - only connect if the backend provides it.
             if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
 
             bridge.request_initial_data();
@@ -48,7 +48,7 @@ function onStatusChanged(message, isActive) {
 }
 
 function onDeviceChanged(label) {
-    // label is "Name  (Nch)" — split the channel suffix onto its own line
+    // label is "Name  (Nch)" - split the channel suffix onto its own line
     const m = label.match(/^(.*?)\s*\((.*)\)\s*$/);
     if (m) { setText("device-name", m[1].trim()); setText("device-channels", m[2].trim()); }
     else { setText("device-name", label); setText("device-channels", ""); }
@@ -127,7 +127,7 @@ window.AR = {
         let low = parseInt(lowEl.value);
         let high = parseInt(highEl.value);
         if (low > high) { [low, high] = [high, low]; }   // keep ordered
-        setText("freq-val", `${low}–${high} Hz`);
+        setText("freq-val", `${low}-${high} Hz`);
         updateDualFill();
         bridge.set_freq_range(low, high);
     },
@@ -159,7 +159,7 @@ window.AR = {
         const name = sel?.value;
         if (!name) return;
         if (!(window._profiles || {})[name]) {
-            window.alert("Built-in presets can't be deleted — only saved presets (★).");
+            window.alert("Built-in presets can't be deleted - only saved presets (★).");
             return;
         }
         bridge.delete_profile(name);
@@ -168,7 +168,7 @@ window.AR = {
     setMonitor(idx) { bridge.set_monitor(parseInt(idx)); },
 
     setProgram(value) {
-        // Backend method may not exist yet — guard it.
+        // Backend method may not exist yet - guard it.
         if (bridge.set_program) bridge.set_program(value);
         else console.log("set_program not wired yet; selected:", value);
     },
@@ -200,7 +200,7 @@ function applyProfileValues(p) {
     AR.setFreqRange();
 }
 
-// ── Preview canvas — mirrors overlay.py rendering ──────────────────────
+// ── Preview canvas - mirrors overlay.py rendering ──────────────────────
 // overlay.py: faint white base circle + accent-coloured arc "blips",
 // 35° span, round cap, stroke width = thickness. Here we draw one static
 // sample blip so the user sees the chosen colour + thickness style.
@@ -327,7 +327,7 @@ function AR_initLocal() {
     setText("max-amp-val", "1.00");
     setText("thickness-val", "6 px");
     updateDualFill();
-    setText("freq-val", "100–900 Hz");
+    setText("freq-val", "100-900 Hz");
     updateColorReadout("#9751F2");
     drawPreview();
 }

@@ -1,4 +1,4 @@
-# ── Secrets / credentials — never commit (public repo) ──
+# ── Secrets / credentials - never commit (public repo) ──
 .auth_cache.json
 # auth.py: contains a Supabase key + login logic; unused by v2
 auth.py
@@ -8,6 +8,8 @@ handoff.md
 feedback.md
 design/
 *.png
+# but DO track the README screenshot
+!docs/screenshot.png
 profiles.json
 # legacy UI; v2 lives in dashboard_v2/
 dashboard/

@@ -1,9 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
-   Visual Audio Overlay — dashboard_v2
+   Visual Audio Overlay - dashboard_v2
    Tokens extracted from Figma (VisualAudioOverlay, node 5:2).
    ═══════════════════════════════════════════════════════════════ */
 
-/* Self-hosted design font — bundled in fonts/ so it works offline in the .exe */
+/* Self-hosted design font - bundled in fonts/ so it works offline in the .exe */
 @font-face {
     font-family: "Google Sans Flex";
     font-style: normal;
@@ -57,7 +57,7 @@ html, body {
     background: var(--bg);
     color: var(--text);
     height: 100%;
-    overflow: hidden;          /* never scroll — content fits the window */
+    overflow: hidden;          /* never scroll - content fits the window */
 }
 
 /* Teal corner glow (top-left), matching the blurred ellipse in Figma */

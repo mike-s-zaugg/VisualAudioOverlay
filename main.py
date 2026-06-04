@@ -37,10 +37,10 @@ print(f"Dashboard: {DASHBOARD_FILE}  (exists: {os.path.exists(DASHBOARD_FILE)})"
 
 SOUND_PRESETS = {
     "All Sounds":           {"freq_low": 20,  "freq_high": 20000, "max_amp": 1.0},
-    "Footsteps — CS2":      {"freq_low": 100, "freq_high": 900,   "max_amp": 0.15},
-    "Footsteps — Valorant": {"freq_low": 80,  "freq_high": 1000,  "max_amp": 0.12},
-    "Footsteps — Fortnite": {"freq_low": 120, "freq_high": 800,   "max_amp": 0.18},
-    "Footsteps — General":  {"freq_low": 100, "freq_high": 800,   "max_amp": 0.15},
+    "Footsteps - CS2":      {"freq_low": 100, "freq_high": 900,   "max_amp": 0.15},
+    "Footsteps - Valorant": {"freq_low": 80,  "freq_high": 1000,  "max_amp": 0.12},
+    "Footsteps - Fortnite": {"freq_low": 120, "freq_high": 800,   "max_amp": 0.18},
+    "Footsteps - General":  {"freq_low": 100, "freq_high": 800,   "max_amp": 0.15},
     "Custom":               {"freq_low": 100, "freq_high": 800,   "max_amp": 1.0},
 }
 
@@ -172,7 +172,7 @@ class AudioRadarApp(QMainWindow):
         self.selected_monitor = 0
         self.profiles = self._load_profiles()
 
-        # Overlay (PyQt6 transparent window — unchanged)
+        # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar()
 
         # Audio thread (starts idle, no capture yet)
@@ -186,7 +186,7 @@ class AudioRadarApp(QMainWindow):
         # WebEngine view
         self.view = QWebEngineView()
 
-        # WebChannel — registers `bridge` as `window.bridge` in JS
+        # WebChannel - registers `bridge` as `window.bridge` in JS
         self.channel = QWebChannel()
         self.channel.registerObject("bridge", self.bridge)
         self.view.page().setWebChannel(self.channel)
