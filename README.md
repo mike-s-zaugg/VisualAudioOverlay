@@ -5,6 +5,9 @@ sound is coming from (stereo L/R balance or 5.1 surround), and draws a
 transparent, always-on-top **radar overlay** of directional "blips" — aimed at
 FPS footstep awareness and accessibility.
 
+If this project helps you, you can support development here:
+☕ **[Buy Me a Coffee](https://buymeacoffee.com/mikezaugg)**
+
 ## Architecture
 
 - **`main.py`** — app entry. Hosts the control panel (an HTML/JS dashboard in a
