@@ -23,6 +23,7 @@ else:
     DATA_DIR = RESOURCE_DIR
 
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 # Prefer the new dashboard_v2 UI, then index.html next to main.py, then the
 # original dashboard/ (kept as a fallback). Resolved against RESOURCE_DIR so it
@@ -58,6 +59,7 @@ class Bridge(QObject):
     profilesChanged = pyqtSignal(str)          # full profiles dict as JSON
     monitorsChanged = pyqtSignal(str)          # list of monitors as JSON
     presetsChanged  = pyqtSignal(str)          # list of preset names as JSON
+    overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -102,6 +104,22 @@ class Bridge(QObject):
     @pyqtSlot(int)
     def set_monitor(self, idx: int):
         self._app.selected_monitor = idx
+
+    @pyqtSlot(bool)
+    def set_overlay_drag_enabled(self, enabled: bool):
+        self._app.set_overlay_drag_enabled(enabled)
+
+    @pyqtSlot(int, int)
+    def set_overlay_position(self, x: int, y: int):
+        self._app.move_overlay(x, y)
+
+    @pyqtSlot(int, int)
+    def nudge_overlay(self, dx: int, dy: int):
+        self._app.nudge_overlay(dx, dy)
+
+    @pyqtSlot()
+    def reset_overlay_position(self):
+        self._app.reset_overlay_position()
 
     # ── Overlay Appearance ────────────────────────────────────────────
     @pyqtSlot(str)
@@ -159,6 +177,9 @@ class Bridge(QObject):
         # Presets
         self.presetsChanged.emit(json.dumps(list(SOUND_PRESETS.keys())))
 
+        # Overlay position
+        self._app.emit_overlay_position()
+
 
 # ── Main Application ────────────────────────────────────────────────────────
 
@@ -171,6 +192,8 @@ class AudioRadarApp(QMainWindow):
         self.invert_direction = False
         self.selected_monitor = 0
         self.profiles = self._load_profiles()
+        self.settings = self._load_settings()
+        self.radar_active = False
 
         # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar()
@@ -182,6 +205,7 @@ class AudioRadarApp(QMainWindow):
 
         # Bridge object exposed to JS
         self.bridge = Bridge(self)
+        self.overlay.positionChanged.connect(self.on_overlay_position_changed)
 
         # WebEngine view
         self.view = QWebEngineView()
@@ -206,23 +230,33 @@ class AudioRadarApp(QMainWindow):
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
 
+    def on_overlay_position_changed(self, x: int, y: int):
+        self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
+        self._save_settings()
+        self.emit_overlay_position()
+
+    def emit_overlay_position(self):
+        pos = self.overlay.pos()
+        state = {
+            "x": int(pos.x()),
+            "y": int(pos.y()),
+            "drag_enabled": bool(self.overlay.drag_enabled),
+        }
+        self.bridge.overlayPositionChanged.emit(json.dumps(state))
+
     # ── Radar Control ─────────────────────────────────────────────────
     def start_radar(self):
+        self.radar_active = True
         self.overlay.show()
+        self._place_overlay_for_start()
 
-        # Position overlay on selected monitor
-        screens = QApplication.screens()
-        idx = self.selected_monitor if self.selected_monitor < len(screens) else 0
-        geo = screens[idx].geometry()
-        self.overlay.move(
-            geo.x() + (geo.width()  - self.overlay.width())  // 2,
-            geo.y() + (geo.height() - self.overlay.height()) // 2,
-        )
-
-        self.audio_thread.start()
+        if not self.audio_thread.isRunning():
+            self.audio_thread.start()
         self.bridge.statusChanged.emit("Radar is active", True)
 
     def stop_radar(self):
+        self.radar_active = False
+        self.overlay.set_drag_enabled(False)
         self.overlay.hide()
         self.audio_thread.stop()
 
@@ -232,6 +266,76 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.device_info_signal.connect(self.on_device_info)
 
         self.bridge.statusChanged.emit("Radar stopped", False)
+        self.emit_overlay_position()
+
+    def _selected_monitor_center_position(self):
+        screens = QApplication.screens()
+        idx = self.selected_monitor if self.selected_monitor < len(screens) else 0
+        geo = screens[idx].geometry()
+        return (
+            geo.x() + (geo.width()  - self.overlay.width())  // 2,
+            geo.y() + (geo.height() - self.overlay.height()) // 2,
+        )
+
+    def _saved_overlay_position_is_visible(self, pos):
+        if not isinstance(pos, dict) or "x" not in pos or "y" not in pos:
+            return False
+
+        x = int(pos["x"])
+        y = int(pos["y"])
+        width = self.overlay.width()
+        height = self.overlay.height()
+
+        for screen in QApplication.screens():
+            geo = screen.geometry()
+            visible_x = x + width > geo.x() and x < geo.x() + geo.width()
+            visible_y = y + height > geo.y() and y < geo.y() + geo.height()
+            if visible_x and visible_y:
+                return True
+        return False
+
+    def _place_overlay_for_start(self):
+        pos = self.settings.get("overlay_position")
+        if self._saved_overlay_position_is_visible(pos):
+            self.overlay.move(int(pos["x"]), int(pos["y"]))
+        else:
+            x, y = self._selected_monitor_center_position()
+            self.overlay.move(x, y)
+        self.emit_overlay_position()
+
+    def set_overlay_drag_enabled(self, enabled: bool):
+        enabled = bool(enabled)
+        if enabled and not self.overlay.isVisible():
+            self.overlay.show()
+            self._place_overlay_for_start()
+
+        self.overlay.set_drag_enabled(enabled)
+
+        if enabled:
+            self.emit_overlay_position()
+            return
+
+        pos = self.overlay.pos()
+        self.on_overlay_position_changed(pos.x(), pos.y())
+        if not self.radar_active:
+            self.overlay.hide()
+
+    def move_overlay(self, x: int, y: int):
+        if not self.overlay.isVisible():
+            self.overlay.show()
+            if not self.radar_active:
+                self.overlay.set_drag_enabled(True)
+
+        self.overlay.move(int(x), int(y))
+        self.on_overlay_position_changed(int(x), int(y))
+
+    def nudge_overlay(self, dx: int, dy: int):
+        pos = self.overlay.pos()
+        self.move_overlay(pos.x() + int(dx), pos.y() + int(dy))
+
+    def reset_overlay_position(self):
+        x, y = self._selected_monitor_center_position()
+        self.move_overlay(x, y)
 
     # ── Profiles ──────────────────────────────────────────────────────
     def _load_profiles(self) -> dict:
@@ -246,6 +350,19 @@ class AudioRadarApp(QMainWindow):
     def _save_profiles(self):
         with open(PROFILES_FILE, "w") as f:
             json.dump(self.profiles, f, indent=2)
+
+    def _load_settings(self) -> dict:
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, "r") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_settings(self):
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(self.settings, f, indent=2)
 
     # ── Lifecycle ─────────────────────────────────────────────────────
     def closeEvent(self, event):

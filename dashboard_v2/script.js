@@ -19,6 +19,7 @@
  */
 
 let radarActive = false;
+let moveModeActive = false;
 
 // ── Bridge init ────────────────────────────────────────────────────────
 function initBridge() {
@@ -31,6 +32,7 @@ function initBridge() {
             bridge.profilesChanged.connect(onProfilesChanged);
             bridge.monitorsChanged.connect(onMonitorsChanged);
             bridge.presetsChanged.connect(onPresetsChanged);
+            bridge.overlayPositionChanged.connect(onOverlayPositionChanged);
             // Optional new signal - only connect if the backend provides it.
             if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
 
@@ -72,6 +74,13 @@ function onProgramsChanged(jsonStr) {
     const progs = JSON.parse(jsonStr);
     fillSelect("program-select", [{ value: "all", label: "All (system audio)" },
         ...progs.map(p => ({ value: p, label: p }))]);
+}
+
+function onOverlayPositionChanged(jsonStr) {
+    const state = JSON.parse(jsonStr);
+    moveModeActive = !!state.drag_enabled;
+    setText("position-val", `${state.x}, ${state.y}`);
+    syncMoveUI();
 }
 
 // ── Preset / profile dropdowns ─────────────────────────────────────────
@@ -171,6 +180,18 @@ window.AR = {
         // Backend method may not exist yet - guard it.
         if (bridge.set_program) bridge.set_program(value);
         else console.log("set_program not wired yet; selected:", value);
+    },
+
+    toggleMoveMode() {
+        bridge.set_overlay_drag_enabled(!moveModeActive);
+    },
+
+    nudgeOverlay(dx, dy) {
+        bridge.nudge_overlay(parseInt(dx), parseInt(dy));
+    },
+
+    resetOverlay() {
+        bridge.reset_overlay_position();
     },
 
     setAccentColor(hex) {
@@ -303,6 +324,13 @@ function syncToggleUI() {
     }
 }
 
+function syncMoveUI() {
+    const btn = document.getElementById("btn-move");
+    if (!btn) return;
+    btn.textContent = moveModeActive ? "Done" : "Move";
+    btn.classList.toggle("is-active", moveModeActive);
+}
+
 // ── Bootstrap ──────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", function () {
     // Default program option until/unless backend sends a list
@@ -326,6 +354,8 @@ function AR_initLocal() {
     setText("gain-val", "1.0x");
     setText("max-amp-val", "1.00");
     setText("thickness-val", "6 px");
+    setText("position-val", "0, 0");
+    syncMoveUI();
     updateDualFill();
     setText("freq-val", "100-900 Hz");
     updateColorReadout("#9751F2");
