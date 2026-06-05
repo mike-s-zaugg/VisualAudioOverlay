@@ -9,7 +9,7 @@
 <p align="center">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D6">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB">
-  <img alt="License" src="https://img.shields.io/badge/license-All%20Rights%20Reserved-red">
+  <img alt="License" src="https://img.shields.io/badge/license-FSL--1.1--MIT-blue">
   <img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange">
 </p>
 
@@ -121,9 +121,28 @@ This tool reads only standard Windows audio output and does not read or modify
 game memory or files. It is intended as an accessibility aid. Anti-cheat policies
 vary between games, so use it at your own discretion.
 
+## AI Ussage
+
+I want to publicly tell how I used AI in this code. The UI was 100% made by myself.
+I have used Claude Code for some logic and to help me with decisions. Most of my code is pushed through it.
+
+## Contributing
+
+Contributions are welcome. Bug reports, fixes, and new features all help. Please
+read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and see
+[SECURITY.md](SECURITY.md) for how to report vulnerabilities.
+
+Good first issues to pick up: mono audio output for single-sided listeners, a
+Linux port, and per-application audio capture.
+
 ## License
 
-Copyright (c) 2026 Mike Zaugg. **All rights reserved.** The source is published
-for transparency and personal use of the released app only. You may not copy,
-modify, redistribute, sell, or reuse the code or the application without written
-permission. See the [LICENSE](LICENSE) for the full terms.
+Copyright (c) 2026 Mike Zaugg.
+
+This project is **source-available**, not open source. It is licensed under the
+**Functional Source License, Version 1.1, MIT Future License (FSL-1.1-MIT)**. In
+short: you are free to use, modify, and contribute to the code for any purpose
+except building a competing product. Each release automatically becomes available
+under the permissive MIT license two years after it ships.
+
+See the [LICENSE](LICENSE) for the full terms.
