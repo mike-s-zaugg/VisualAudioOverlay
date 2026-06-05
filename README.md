@@ -121,7 +121,7 @@ This tool reads only standard Windows audio output and does not read or modify
 game memory or files. It is intended as an accessibility aid. Anti-cheat policies
 vary between games, so use it at your own discretion.
 
-## AI Ussage
+## AI Usage
 
 I want to publicly tell how I used AI in this code. The UI was 100% made by myself.
 I have used Claude Code for some logic and to help me with decisions. Most of my code is pushed through it.
