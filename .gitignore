@@ -33,3 +33,6 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── Personal / private - synced via private repo, keep out of public ──
+post.md
