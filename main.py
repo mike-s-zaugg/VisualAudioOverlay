@@ -216,6 +216,7 @@ class AudioRadarApp(QMainWindow):
         # Bridge object exposed to JS
         self.bridge = Bridge(self)
         self.overlay.positionChanged.connect(self.on_overlay_position_changed)
+        self.overlay.positionPreview.connect(self.on_overlay_position_preview)
 
         # WebEngine view
         self.view = QWebEngineView()
@@ -244,6 +245,17 @@ class AudioRadarApp(QMainWindow):
         self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
         self._save_settings()
         self.emit_overlay_position()
+
+    def on_overlay_position_preview(self, x: int, y: int):
+        """Live drag frames: refresh the UI readout only, no disk write.
+        The final position is persisted once on mouse release via
+        on_overlay_position_changed (issue #3)."""
+        state = {
+            "x": int(x),
+            "y": int(y),
+            "drag_enabled": bool(self.overlay.drag_enabled),
+        }
+        self.bridge.overlayPositionChanged.emit(json.dumps(state))
 
     def emit_overlay_position(self):
         pos = self.overlay.pos()

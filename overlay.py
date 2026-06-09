@@ -4,7 +4,8 @@ from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 
 class OverlayRadar(QWidget):
-    positionChanged = pyqtSignal(int, int)
+    positionChanged = pyqtSignal(int, int)   # committed position (persist to disk)
+    positionPreview = pyqtSignal(int, int)   # live drag frames (UI readout only)
 
     def __init__(self):
         super().__init__()
@@ -116,7 +117,8 @@ class OverlayRadar(QWidget):
         delta = event.globalPosition().toPoint() - self.drag_start_global
         new_pos = self.drag_start_window + delta
         self.move(new_pos)
-        self.positionChanged.emit(new_pos.x(), new_pos.y())
+        # Live update only - persisting every frame hammers the disk (issue #3).
+        self.positionPreview.emit(new_pos.x(), new_pos.y())
         event.accept()
 
     def mouseReleaseEvent(self, event):
