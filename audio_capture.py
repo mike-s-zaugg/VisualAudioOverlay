@@ -8,7 +8,8 @@ class AudioCaptureThread(QThread):
     audio_data_signal = pyqtSignal(float, float)
     device_info_signal = pyqtSignal(str, int)
 
-    def __init__(self, sensitivity=0.005, gain=1.0, freq_low=20, freq_high=20000, max_amplitude=1.0):
+    def __init__(self, sensitivity=0.005, gain=1.0, freq_low=20, freq_high=20000, max_amplitude=1.0,
+                 target_pid=None, target_name=None):
         super().__init__()
         self.sensitivity = sensitivity
         self.gain = gain
@@ -17,6 +18,15 @@ class AudioCaptureThread(QThread):
         self.max_amplitude = max_amplitude  # ignore sounds louder than this (1.0 = no limit)
         self.running = True
         self.samplerate = 48000
+        # When target_pid is set, capture only that program (and its children)
+        # via WASAPI process loopback. None = whole-system loopback (soundcard).
+        self.target_pid = target_pid
+        self.target_name = target_name
+
+    def set_target(self, pid, name=None):
+        """Choose the capture source. Only takes effect before the thread starts."""
+        self.target_pid = pid
+        self.target_name = name
 
     def set_sensitivity(self, sensitivity):
         self.sensitivity = sensitivity
@@ -50,6 +60,43 @@ class AudioCaptureThread(QThread):
         return filtered
 
     def run(self):
+        # Per-app capture takes the process-loopback path; otherwise capture the
+        # whole system mix the way we always have.
+        if self.target_pid:
+            self._run_process_loopback()
+        else:
+            self._run_system_loopback()
+
+    def _run_process_loopback(self):
+        """Capture a single program's audio. Falls back to system audio on failure."""
+        try:
+            from process_loopback import ProcessLoopbackCapture
+        except Exception as e:
+            print(f"Process loopback unavailable ({e}); using system audio.")
+            self._run_system_loopback()
+            return
+
+        cap = ProcessLoopbackCapture(self.target_pid, samplerate=self.samplerate, channels=2)
+        try:
+            cap.start()
+        except Exception as e:
+            print(f"Process loopback failed ({e}); using system audio.")
+            self._run_system_loopback()
+            return
+
+        label = self.target_name or f"PID {self.target_pid}"
+        print(f"Capturing app audio: {label} (per-app, Stereo L/R)")
+        self.device_info_signal.emit(f"{label} (per-app)", 2)
+        try:
+            while self.running:
+                data = cap.read(2400)
+                self._process_chunk(data, use_surround=False)
+        except Exception as e:
+            print(f"Process loopback capture error: {e}")
+        finally:
+            cap.close()
+
+    def _run_system_loopback(self):
         try:
             mics = sc.all_microphones(include_loopback=True)
             loopbacks = [m for m in mics if m.isloopback]

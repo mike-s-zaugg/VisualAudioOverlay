@@ -151,24 +151,6 @@
                     </div>
                 </div>
 
-                <div class="field field--position">
-                    <div class="field-label">
-                        <span>Position</span>
-                        <span class="value" id="position-val">0, 0</span>
-                    </div>
-                    <button id="btn-move" class="btn-toggle btn-toggle--small" onclick="AR.toggleMoveMode()">Move</button>
-                    <div class="nudge-grid">
-                        <span></span>
-                        <button class="nudge-btn" title="Up" onclick="AR.nudgeOverlay(0, -8)">&uarr;</button>
-                        <span></span>
-                        <button class="nudge-btn" title="Left" onclick="AR.nudgeOverlay(-8, 0)">&larr;</button>
-                        <button class="nudge-btn nudge-btn--wide" title="Center" onclick="AR.resetOverlay()">Center</button>
-                        <button class="nudge-btn" title="Right" onclick="AR.nudgeOverlay(8, 0)">&rarr;</button>
-                        <span></span>
-                        <button class="nudge-btn" title="Down" onclick="AR.nudgeOverlay(0, 8)">&darr;</button>
-                        <span></span>
-                    </div>
-                </div>
             </section>
         </div>
 
@@ -177,7 +159,7 @@
             <h2 class="card-title">CUSTOMIZATION</h2>
 
             <div class="custom-grid">
-                <!-- Color -->
+                <!-- Color + Thickness stacked -->
                 <div class="custom-col">
                     <h3 class="group-title">Color</h3>
                     <div class="color-block">
@@ -189,11 +171,8 @@
                             <span class="color-rgb" id="color-rgb">151, 81, 242</span>
                         </div>
                     </div>
-                </div>
 
-                <!-- Thickness -->
-                <div class="custom-col">
-                    <h3 class="group-title">Thickness</h3>
+                    <h3 class="group-title group-title--spaced">Thickness</h3>
                     <div class="control">
                         <div class="control-head">
                             <span>Stroke</span>
@@ -208,6 +187,32 @@
                 <div class="custom-col custom-col--preview">
                     <h3 class="group-title">Preview</h3>
                     <canvas id="preview-canvas" width="150" height="150"></canvas>
+                </div>
+
+                <!-- Position -->
+                <div class="custom-col custom-col--position">
+                    <h3 class="group-title">Position</h3>
+
+                    <!-- Circular D-pad. IDs btn-move / position-val are kept so the
+                         existing JS bridge (toggleMoveMode, position readout) works as-is. -->
+                    <div class="dpad" role="group" aria-label="Overlay position">
+                        <button class="dpad-arrow dpad-arrow--up" title="Move up"
+                            onclick="AR.nudgeOverlay(0, -8)" aria-label="Move up">&uarr;</button>
+                        <button class="dpad-arrow dpad-arrow--right" title="Move right"
+                            onclick="AR.nudgeOverlay(8, 0)" aria-label="Move right">&rarr;</button>
+                        <button class="dpad-arrow dpad-arrow--down" title="Move down"
+                            onclick="AR.nudgeOverlay(0, 8)" aria-label="Move down">&darr;</button>
+                        <button class="dpad-arrow dpad-arrow--left" title="Move left"
+                            onclick="AR.nudgeOverlay(-8, 0)" aria-label="Move left">&larr;</button>
+                        <button class="dpad-center" title="Center on screen"
+                            onclick="AR.resetOverlay()" aria-label="Center on screen">
+                            <span class="dpad-center-label">CENTER</span>
+                            <span class="dpad-coords" id="position-val">0, 0</span>
+                        </button>
+                    </div>
+
+                    <button id="btn-move" class="btn-toggle btn-toggle--small dpad-move"
+                        onclick="AR.toggleMoveMode()">Move</button>
                 </div>
             </div>
         </section>

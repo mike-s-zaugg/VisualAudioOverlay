@@ -2,3 +2,7 @@ PyQt6>=6.11
 PyQt6-WebEngine>=6.11
 numpy>=2.2
 soundcard>=0.4.5
+# Per-application audio capture (WASAPI process loopback) + program enumeration.
+pycaw>=20240210
+comtypes>=1.4
+psutil>=5.9

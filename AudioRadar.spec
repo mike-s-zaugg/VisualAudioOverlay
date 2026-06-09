@@ -10,7 +10,16 @@ a = Analysis(
     datas=[
         ('dashboard_v2', 'dashboard_v2'),
     ],
-    hiddenimports=[],
+    # process_loopback is imported lazily (inside functions), and the COM/audio
+    # stack uses dynamic imports PyInstaller can miss - list them explicitly.
+    hiddenimports=[
+        'process_loopback',
+        'comtypes',
+        'pycaw',
+        'pycaw.api.audioclient',
+        'pycaw.utils',
+        'psutil',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

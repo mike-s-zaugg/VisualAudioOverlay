@@ -121,7 +121,10 @@ body::before {
 }
 .card--custom {
     flex: none;
+    padding-top: 16px;
+    padding-bottom: 16px;
 }
+.card--custom .card-title { margin-bottom: 12px; }
 
 .card-title {
     font-size: 26px;
@@ -313,46 +316,107 @@ body::before {
     margin-bottom: 10px;
 }
 
-.field--position { margin-bottom: 0; }
-.nudge-grid {
-    display: grid;
-    grid-template-columns: 38px 1fr 38px;
-    gap: 8px;
-    align-items: center;
+/* ── Position circular D-pad ───────────────────────────────────────
+   A round, game-HUD style control. Four arrows sit on the ring at the
+   compass points; the center disc is the "center on screen" reset and
+   doubles as the live x,y readout. Sized to echo the radar preview. */
+.dpad {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    margin: 0 auto 12px;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 50% 38%, rgba(255, 255, 255, 0.05), transparent 60%),
+        var(--card);
+    border: 2px solid var(--accent);
 }
-.nudge-btn {
-    height: 32px;
-    min-width: 38px;
+
+.dpad-arrow {
+    position: absolute;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--text);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+}
+.dpad-arrow:hover { background: rgba(0, 157, 255, 0.18); color: var(--accent); }
+.dpad-arrow:active { transform: scale(0.9); }
+
+.dpad-arrow--up    { top: 4px;    left: 50%; transform: translateX(-50%); }
+.dpad-arrow--down  { bottom: 4px; left: 50%; transform: translateX(-50%); }
+.dpad-arrow--left  { left: 4px;   top: 50%;  transform: translateY(-50%); }
+.dpad-arrow--right { right: 4px;  top: 50%;  transform: translateY(-50%); }
+/* keep the centered axis on the active "press" too */
+.dpad-arrow--up:active,
+.dpad-arrow--down:active  { transform: translateX(-50%) scale(0.9); }
+.dpad-arrow--left:active,
+.dpad-arrow--right:active { transform: translateY(-50%) scale(0.9); }
+
+.dpad-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 72px;
+    height: 72px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
     background: var(--card);
     color: var(--text);
     border: 1px solid var(--accent);
-    border-radius: 18px;
+    border-radius: 50%;
     cursor: pointer;
+    box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.4);
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.dpad-center:hover { background: #242424; border-color: var(--glow); }
+.dpad-center:active { transform: translate(-50%, -50%) scale(0.94); }
+.dpad-center-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+}
+.dpad-coords {
     font-size: 14px;
-    box-shadow: 0 4px 8px 2px rgba(0, 0, 0, 0.25);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
 }
-.nudge-btn:hover { background: #2a2a2a; }
-.nudge-btn--wide {
-    width: 100%;
-    padding: 0 10px;
-}
+
+.dpad-move { margin-bottom: 0; }
 
 /* ── CUSTOMIZATION ─────────────────────────────────────────────── */
 .custom-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: 40px;
-    align-items: center;
+    align-items: start;
 }
 .custom-col--preview { justify-self: center; }
+.custom-col--position { justify-self: center; text-align: center; }
+
+/* Second heading inside a stacked column (Color + Thickness share col 1) */
+.group-title--spaced { margin-top: 18px; }
 
 /* Color swatch */
 .color-block { display: flex; align-items: center; gap: 16px; }
 .color-input {
     -webkit-appearance: none;
     appearance: none;
-    width: 96px;
-    height: 96px;
+    width: 80px;
+    height: 80px;
     border: none;
     border-radius: 14px;
     cursor: pointer;

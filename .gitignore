@@ -1,8 +1,3 @@
-# ── Secrets / credentials - never commit (public repo) ──
-.auth_cache.json
-# auth.py: contains a Supabase key + login logic; unused by v2
-auth.py
-
 # ── Local dev / notes / assets not needed to run v2 ──
 handoff.md
 feedback.md

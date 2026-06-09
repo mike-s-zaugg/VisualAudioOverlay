@@ -59,6 +59,7 @@ class Bridge(QObject):
     profilesChanged = pyqtSignal(str)          # full profiles dict as JSON
     monitorsChanged = pyqtSignal(str)          # list of monitors as JSON
     presetsChanged  = pyqtSignal(str)          # list of preset names as JSON
+    programsChanged = pyqtSignal(str)          # running audio programs as JSON
     overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
 
     def __init__(self, app: "AudioRadarApp"):
@@ -104,6 +105,11 @@ class Bridge(QObject):
     @pyqtSlot(int)
     def set_monitor(self, idx: int):
         self._app.selected_monitor = idx
+
+    @pyqtSlot(str)
+    def set_program(self, value: str):
+        """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
+        self._app.selected_program = None if value in ("", "all") else value
 
     @pyqtSlot(bool)
     def set_overlay_drag_enabled(self, enabled: bool):
@@ -177,6 +183,9 @@ class Bridge(QObject):
         # Presets
         self.presetsChanged.emit(json.dumps(list(SOUND_PRESETS.keys())))
 
+        # Running audio programs (for per-app capture)
+        self._app.emit_programs()
+
         # Overlay position
         self._app.emit_overlay_position()
 
@@ -186,11 +195,12 @@ class Bridge(QObject):
 class AudioRadarApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Audio Radar")
+        self.setWindowTitle("Visual Audio Overlay")
         self.resize(1100, 720)
 
         self.invert_direction = False
         self.selected_monitor = 0
+        self.selected_program = None   # None = whole-system audio; else a program name
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
         self.radar_active = False
@@ -244,15 +254,58 @@ class AudioRadarApp(QMainWindow):
         }
         self.bridge.overlayPositionChanged.emit(json.dumps(state))
 
+    # ── Programs (per-app capture) ────────────────────────────────────
+    def list_programs(self):
+        """Running programs with an audio session. Safe to call on the GUI thread."""
+        try:
+            from process_loopback import list_audio_programs
+            return list_audio_programs()
+        except Exception as e:
+            print(f"Program enumeration failed: {e}")
+            return []
+
+    def emit_programs(self):
+        names = [p["name"] for p in self.list_programs()]
+        self.bridge.programsChanged.emit(json.dumps(names))
+
+    def _resolve_target(self):
+        """Map the selected program name to a live PID. Returns (pid, name) or
+        (None, None) for whole-system capture / if the program is gone."""
+        if not self.selected_program:
+            return None, None
+        try:
+            from process_loopback import resolve_pid
+            pid = resolve_pid(self.selected_program)
+        except Exception:
+            pid = None
+        if pid is None:
+            return None, None
+        return pid, self.selected_program
+
     # ── Radar Control ─────────────────────────────────────────────────
     def start_radar(self):
         self.radar_active = True
         self.overlay.show()
         self._place_overlay_for_start()
 
+        # Resolve the capture target fresh (PIDs change between launches), then
+        # configure the idle thread before starting it.
+        pid, name = self._resolve_target()
+        self.audio_thread.set_target(pid, name)
+
         if not self.audio_thread.isRunning():
             self.audio_thread.start()
-        self.bridge.statusChanged.emit("Radar is active", True)
+
+        if self.selected_program and pid is None:
+            self.bridge.statusChanged.emit(
+                f"'{self.selected_program}' has no audio - using system audio", True)
+        elif pid is not None:
+            self.bridge.statusChanged.emit(f"Radar active - capturing {name}", True)
+        else:
+            self.bridge.statusChanged.emit("Radar is active", True)
+
+        # Refresh the program list so newly launched apps show up next time.
+        self.emit_programs()
 
     def stop_radar(self):
         self.radar_active = False

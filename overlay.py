@@ -9,7 +9,7 @@ class OverlayRadar(QWidget):
     def __init__(self):
         super().__init__()
         
-        self.setWindowTitle("Audio Radar Overlay")
+        self.setWindowTitle("Visual Audio Overlay")
         self.base_window_flags = (
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |

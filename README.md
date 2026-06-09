@@ -39,6 +39,9 @@ radar overlay that floats over your game on your main screen.
 
 - **Directional radar overlay.** Transparent, always-on-top, click-through. Arcs
   fade in and out in the direction of each sound.
+- **Per-application capture.** Pick a single program (your game) so other apps
+  like Discord voice chat are ignored. Uses the Windows WASAPI process-loopback
+  API; pick **All (system audio)** to capture everything as before.
 - **Game-specific presets.** Built-in frequency band-pass filters (CS2, Valorant,
   Fortnite, and more) isolate footsteps and ignore useless low-end rumble.
 - **Smart audio boost.** Amplifies quiet, distant sounds so faint cues still register.
@@ -78,7 +81,10 @@ Requires **Windows 10 (build 19041+)** and **Python 3.10+**.
 2. Choose a **Preset** that matches your game, or tune Sensitivity, Gain, and the
    Frequency range yourself.
 3. Set your radar **Color** and **Thickness** in Customization.
-4. Hit **Start** in the Radar panel. The overlay appears on your selected monitor.
+4. (Optional) In the Radar panel, pick a **Program** to capture only that game's
+   audio. Leave it on **All (system audio)** to capture everything. The program
+   must already be playing sound to appear in the list.
+5. Hit **Start** in the Radar panel. The overlay appears on your selected monitor.
 
 ## Build a standalone .exe
 
@@ -95,8 +101,6 @@ with no extra setup. Output lands in `dist/`.
 
 ## Roadmap
 
-- **Per-application capture.** Pick a single program (your game) so other apps like
-  Discord voice chat are ignored. Planned via the Windows WASAPI process loopback API.
 - **Editable presets** saved to disk.
 - **Haptic output.** Drive ButtKicker-style shakers from the strongest audio cue.
 
@@ -106,6 +110,7 @@ with no extra setup. Output lands in `dist/`.
 |------|------|
 | `main.py` | App entry. Hosts the control panel and overlay, exposes the JS/Python bridge. |
 | `audio_capture.py` | Captures loopback audio, band-pass filters it, computes direction + intensity. |
+| `process_loopback.py` | Per-application capture via the WASAPI process-loopback API, plus enumeration of programs with audio. |
 | `overlay.py` | The transparent, click-through radar window. |
 | `dashboard_v2/` | The control-panel UI (HTML/CSS/JS, icons, bundled font). |
 
@@ -132,8 +137,8 @@ Contributions are welcome. Bug reports, fixes, and new features all help. Please
 read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and see
 [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
 
-Good first issues to pick up: mono audio output for single-sided listeners, a
-Linux port, and per-application audio capture.
+Good first issues to pick up: mono audio output for single-sided listeners and a
+Linux port.
 
 ## License
 
