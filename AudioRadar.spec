@@ -1,5 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+# Optionally bundle the VB-CABLE installer (Mono Output feature) if present.
+# Drop VBCABLE_Setup_x64.exe into vendor/VBCABLE/ before building to embed it;
+# without it, the app falls back to opening the VB-CABLE download page. Bundle
+# the basic VB-CABLE only (not A+B / C+D) and keep it unmodified - see
+# THIRD-PARTY-NOTICES.md for the donationware attribution terms.
+_vendor_datas = [('vendor', 'vendor')] if os.path.isdir('vendor') else []
 
 a = Analysis(
     ['main.py'],
@@ -9,11 +17,12 @@ a = Analysis(
     # packaged .exe renders correctly offline for end users.
     datas=[
         ('dashboard_v2', 'dashboard_v2'),
-    ],
+    ] + _vendor_datas,
     # process_loopback is imported lazily (inside functions), and the COM/audio
     # stack uses dynamic imports PyInstaller can miss - list them explicitly.
     hiddenimports=[
         'process_loopback',
+        'mono_output',
         'comtypes',
         'pycaw',
         'pycaw.api.audioclient',

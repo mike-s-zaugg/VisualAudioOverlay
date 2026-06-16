@@ -61,6 +61,7 @@ class Bridge(QObject):
     presetsChanged  = pyqtSignal(str)          # list of preset names as JSON
     programsChanged = pyqtSignal(str)          # running audio programs as JSON
     overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
+    monoStateChanged = pyqtSignal(str)         # mono-output devices + cable state as JSON
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -110,6 +111,28 @@ class Bridge(QObject):
     def set_program(self, value: str):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
         self._app.selected_program = None if value in ("", "all") else value
+
+    # ── Mono output (single-sided listeners) ──────────────────────────
+    @pyqtSlot(bool)
+    def set_mono_enabled(self, enabled: bool):
+        """Turn the in-app mono down-mix on/off. Applied on the next Start."""
+        self._app.set_mono_enabled(enabled)
+
+    @pyqtSlot(str)
+    def set_mono_output(self, device: str):
+        """Choose which real device the mono mix plays to. '' = system default."""
+        self._app.set_mono_output(device)
+
+    @pyqtSlot()
+    def refresh_mono_devices(self):
+        self._app.emit_mono_state()
+
+    @pyqtSlot()
+    def install_vbcable(self):
+        """Launch the bundled VB-CABLE installer (UAC-elevated) so mono output can
+        route the game away from the headphones. Falls back to the download page
+        if the installer isn't bundled in this build."""
+        self._app.install_vbcable()
 
     @pyqtSlot(bool)
     def set_overlay_drag_enabled(self, enabled: bool):
@@ -189,6 +212,9 @@ class Bridge(QObject):
         # Overlay position
         self._app.emit_overlay_position()
 
+        # Mono-output devices + VB-CABLE detection
+        self._app.emit_mono_state()
+
 
 # ── Main Application ────────────────────────────────────────────────────────
 
@@ -204,6 +230,11 @@ class AudioRadarApp(QMainWindow):
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
         self.radar_active = False
+
+        # Mono output (single-sided listeners). Persisted in settings.json so the
+        # user's choice survives restarts; applied to the audio thread on Start.
+        self.mono_enabled = bool(self.settings.get("mono_enabled", False))
+        self.mono_device = self.settings.get("mono_device") or None
 
         # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar()
@@ -280,6 +311,64 @@ class AudioRadarApp(QMainWindow):
         names = [p["name"] for p in self.list_programs()]
         self.bridge.programsChanged.emit(json.dumps(names))
 
+    # ── Mono output (single-sided listeners) ──────────────────────────
+    def set_mono_enabled(self, enabled: bool):
+        self.mono_enabled = bool(enabled)
+        self.settings["mono_enabled"] = self.mono_enabled
+        self._save_settings()
+        self.emit_mono_state()
+
+    def set_mono_output(self, device: str):
+        self.mono_device = device or None
+        self.settings["mono_device"] = self.mono_device
+        self._save_settings()
+        self.emit_mono_state()
+
+    def emit_mono_state(self):
+        """Push the playback-device list + VB-CABLE detection + current selection
+        to the UI so it can render the mono setup card."""
+        try:
+            from mono_output import (list_output_devices, default_output_name,
+                                     detect_virtual_cable)
+            devices = list_output_devices()
+            default = default_output_name()
+            cable = detect_virtual_cable()
+        except Exception as e:
+            print(f"Mono device enumeration failed: {e}")
+            devices, default, cable = [], None, None
+
+        state = {
+            "devices": devices,
+            "default": default,
+            "cable": cable,            # None until VB-CABLE is installed
+            "enabled": self.mono_enabled,
+            "selected": self.mono_device,
+        }
+        self.bridge.monoStateChanged.emit(json.dumps(state))
+
+    def install_vbcable(self):
+        """Launch the bundled VB-CABLE installer with a UAC prompt. If the build
+        doesn't bundle it, open the official download page instead. The installer
+        shows its own UI on purpose (donationware terms + trust for the
+        anti-cheat-wary audience)."""
+        installer = os.path.join(RESOURCE_DIR, "vendor", "VBCABLE",
+                                 "VBCABLE_Setup_x64.exe")
+        if os.path.exists(installer):
+            try:
+                import shutil
+                import tempfile
+                import ctypes
+                # Copy out of the (onefile) bundle first: _MEIPASS is wiped when
+                # this app exits, which could break the installer mid-run.
+                tmp = os.path.join(tempfile.gettempdir(), "VBCABLE_Setup_x64.exe")
+                shutil.copyfile(installer, tmp)
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", tmp, None, None, 1)
+                return
+            except Exception as e:
+                print(f"VB-CABLE launch failed: {e}")
+        import webbrowser
+        webbrowser.open("https://vb-audio.com/Cable/")
+
     def _resolve_target(self):
         """Map the selected program name to a live PID. Returns (pid, name) or
         (None, None) for whole-system capture / if the program is gone."""
@@ -304,6 +393,8 @@ class AudioRadarApp(QMainWindow):
         # configure the idle thread before starting it.
         pid, name = self._resolve_target()
         self.audio_thread.set_target(pid, name)
+        # Re-apply mono config (the thread is recreated fresh on each Start).
+        self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
 
         if not self.audio_thread.isRunning():
             self.audio_thread.start()

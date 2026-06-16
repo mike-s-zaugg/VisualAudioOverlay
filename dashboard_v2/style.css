@@ -176,6 +176,82 @@ body::before {
 .device-name { font-size: 15px; margin-bottom: 4px; }
 .device-sub { font-size: 14px; color: var(--text-dim); }
 
+/* ── Mono output toggle + setup ────────────────────────────────── */
+.switch {
+    margin-left: auto;
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    cursor: pointer;
+    flex: none;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch-track {
+    position: absolute;
+    inset: 0;
+    background: var(--track);
+    border-radius: 22px;
+    transition: background 0.15s ease;
+}
+.switch-track::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s ease;
+}
+.switch input:checked + .switch-track { background: var(--accent); }
+.switch input:checked + .switch-track::before { transform: translateX(18px); }
+
+/* The Mono Output toggle lives in the (narrow, fixed-height) HARDWARE card, but
+   its multi-step setup lives in a modal so the card never clips. */
+.mono-setup-link { color: var(--accent); text-decoration: none; margin-left: 8px; }
+.mono-setup-link:hover { text-decoration: underline; }
+
+.mono-status { line-height: 1.35; font-size: 13px; margin: 4px 0 8px; }
+.mono-status .ok { color: #1FCB4F; }
+.mono-status .warn { color: #F0A500; }
+.is-hidden { display: none !important; }
+
+/* ── Modal (mono setup) ────────────────────────────────────────── */
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+}
+.modal-card {
+    position: relative;
+    z-index: 1;
+    width: 440px;
+    max-width: 90vw;
+    max-height: 86vh;
+    overflow-y: auto;
+    background: var(--card);
+    border: 1px solid #383838;
+    border-radius: var(--radius-card);
+    padding: 24px 28px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+.modal-intro { font-size: 14px; color: var(--text-dim); line-height: 1.45; margin-bottom: 18px; }
+.mono-steps { margin: 14px 0 18px 18px; font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.mono-steps li { margin-bottom: 6px; }
+.mono-steps b { color: var(--text); font-weight: 500; }
+.mono-done { margin-top: 4px; }
+
 /* ── Selects (pill dropdowns) ──────────────────────────────────── */
 .select-wrap { position: relative; display: inline-block; }
 .select-wrap--grow { flex: 1 1 auto; }
