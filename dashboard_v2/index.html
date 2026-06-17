@@ -238,6 +238,45 @@
             </div>
         </section>
 
+        <!-- ── Update banner (hidden until a newer GitHub release is found) ──
+             Populated by onUpdateAvailable(); the whole bar is dismissible and
+             never reappears in this session. -->
+        <div id="update-banner" class="update-banner is-hidden">
+            <span id="update-banner-text" class="update-banner-text">A new version is available.</span>
+            <a href="#" class="update-banner-link"
+                onclick="AR.openUpdate(); return false;">Download</a>
+            <button class="update-banner-close" title="Dismiss"
+                onclick="AR.dismissUpdate()" aria-label="Dismiss">&times;</button>
+        </div>
+
+        <!-- ── Footer: passive, non-intrusive support links ─────────────────
+             No popups or nags - just always-there ghost links. Each opens in
+             the real browser via bridge.open_url (not inside this webview). -->
+        <footer class="footer">
+            <a href="#" class="footer-link" title="Star the project on GitHub"
+                onclick="AR.openRepo(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M12 17.27l-5.18 3.04 1.4-5.96-4.62-4 6.08-.52L12 4l2.32 5.83 6.08.52-4.62 4 1.4 5.96z"/>
+                </svg>
+                <span>Star on GitHub</span>
+            </a>
+            <a href="#" class="footer-link" title="Report a bug or request a feature"
+                onclick="AR.openFeedback(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-4 4V5a1 1 0 0 1 1-1z"/>
+                </svg>
+                <span>Send feedback</span>
+            </a>
+            <a href="#" class="footer-link" title="Contribute / help build it"
+                onclick="AR.openContribute(); return false;">
+                <svg class="footer-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M12 21s-7.5-4.6-10-9A5 5 0 0 1 12 6a5 5 0 0 1 10 6c-2.5 4.4-10 9-10 9z"/>
+                </svg>
+                <span>Contribute</span>
+            </a>
+            <span class="footer-version" id="footer-version"></span>
+        </footer>
+
     </div>
 
     <!-- ── Mono Output setup modal ───────────────────────────────────────

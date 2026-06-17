@@ -26,6 +26,17 @@
 let radarActive = false;
 let moveModeActive = false;
 
+// Project links (opened in the real browser via bridge.open_url). The update
+// banner overrides updateUrl when a specific release page is known.
+const REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay";
+const FEEDBACK_URL = REPO_URL + "/issues/new/choose";
+const CONTRIBUTE_URL = REPO_URL + "/blob/main/CONTRIBUTING.md";
+let updateUrl = REPO_URL + "/releases/latest";
+
+function openExternal(url) {
+    if (bridge && bridge.open_url) bridge.open_url(url);
+}
+
 // ── Bridge init ────────────────────────────────────────────────────────
 function initBridge() {
     return new Promise((resolve) => {
@@ -41,11 +52,24 @@ function initBridge() {
             // Optional new signals - only connect if the backend provides them.
             if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
             if (bridge.monoStateChanged) bridge.monoStateChanged.connect(onMonoStateChanged);
+            if (bridge.updateAvailable) bridge.updateAvailable.connect(onUpdateAvailable);
+
+            // Show the current version in the footer.
+            if (bridge.get_app_version) {
+                bridge.get_app_version(function (v) { setText("footer-version", "v" + v); });
+            }
 
             bridge.request_initial_data();
             resolve();
         });
     });
+}
+
+// Backend found a newer GitHub release. Show the dismissible banner.
+function onUpdateAvailable(version, url) {
+    if (url) updateUrl = url;
+    setText("update-banner-text", "Version " + version + " is available.");
+    toggleClass("update-banner", "is-hidden", false);
 }
 
 // ── Signal handlers (Python → JS) ──────────────────────────────────────
@@ -269,6 +293,13 @@ window.AR = {
         bridge.set_stroke_width(parseInt(val));
         drawPreview();
     },
+
+    // ── Footer support links + update banner ──────────────────────────
+    openRepo() { openExternal(REPO_URL); },
+    openFeedback() { openExternal(FEEDBACK_URL); },
+    openContribute() { openExternal(CONTRIBUTE_URL); },
+    openUpdate() { openExternal(updateUrl); },
+    dismissUpdate() { toggleClass("update-banner", "is-hidden", true); },
 };
 
 // Apply a saved profile's values to the controls and push to Python.

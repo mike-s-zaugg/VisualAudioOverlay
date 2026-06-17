@@ -17,6 +17,7 @@ a = Analysis(
     # packaged .exe renders correctly offline for end users.
     datas=[
         ('dashboard_v2', 'dashboard_v2'),
+        ('assets', 'assets'),
     ] + _vendor_datas,
     # process_loopback is imported lazily (inside functions), and the COM/audio
     # stack uses dynamic imports PyInstaller can miss - list them explicitly.
@@ -57,4 +58,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icon.ico',
 )
