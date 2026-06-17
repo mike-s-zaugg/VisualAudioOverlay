@@ -31,6 +31,7 @@ let moveModeActive = false;
 const REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay";
 const FEEDBACK_URL = REPO_URL + "/issues/new/choose";
 const CONTRIBUTE_URL = REPO_URL + "/blob/main/CONTRIBUTING.md";
+const COFFEE_URL = "https://buymeacoffee.com/mikezaugg";
 let updateUrl = REPO_URL + "/releases/latest";
 
 function openExternal(url) {
@@ -298,6 +299,7 @@ window.AR = {
     openRepo() { openExternal(REPO_URL); },
     openFeedback() { openExternal(FEEDBACK_URL); },
     openContribute() { openExternal(CONTRIBUTE_URL); },
+    openCoffee() { openExternal(COFFEE_URL); },
     openUpdate() { openExternal(updateUrl); },
     dismissUpdate() { toggleClass("update-banner", "is-hidden", true); },
 };

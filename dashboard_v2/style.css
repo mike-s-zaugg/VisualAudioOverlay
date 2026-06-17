@@ -531,6 +531,7 @@ body::before {
     transition: color 0.15s ease;
 }
 .footer-link:hover { color: var(--accent); }
+.footer-link--coffee:hover { color: #ffdd00; }
 .footer-icon {
     width: 15px;
     height: 15px;
