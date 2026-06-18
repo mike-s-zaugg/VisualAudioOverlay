@@ -36,9 +36,12 @@ _candidates = [
 DASHBOARD_FILE = next((p for p in _candidates if os.path.exists(p)), _candidates[0])
 print(f"Dashboard: {DASHBOARD_FILE}  (exists: {os.path.exists(DASHBOARD_FILE)})")
 
-# App icon (window/taskbar). Bundled under assets/ via the PyInstaller spec, so
-# it resolves against RESOURCE_DIR both in dev and inside the packaged .exe.
-APP_ICON = os.path.join(RESOURCE_DIR, "assets", "icon.ico")
+# App icon (window/taskbar). Use the PNG, not the .ico: QIcon(".ico") needs Qt's
+# qico imageformat plugin, which PyInstaller does not reliably bundle - when it is
+# missing the .ico loads as an empty icon and the taskbar shows no icon. PNG is
+# handled by Qt core (no plugin), so it works in the packaged .exe. The .ico is
+# still used for the .exe file icon via the PyInstaller spec (independent of this).
+APP_ICON = os.path.join(RESOURCE_DIR, "assets", "icon.png")
 
 # ── Version + project links ─────────────────────────────────────────────────
 # APP_VERSION must match the GitHub release tag (without the leading "v") for the
