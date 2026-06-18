@@ -174,6 +174,13 @@ class Bridge(QObject):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
         self._app.selected_program = None if value in ("", "all") else value
 
+    @pyqtSlot()
+    def refresh_programs(self):
+        """Re-enumerate running audio programs. JS calls this when the user opens
+        the Program dropdown, so the list is live (a program only appears once it
+        is actually playing audio)."""
+        self._app.emit_programs()
+
     # ── Mono output (single-sided listeners) ──────────────────────────
     @pyqtSlot(bool)
     def set_mono_enabled(self, enabled: bool):

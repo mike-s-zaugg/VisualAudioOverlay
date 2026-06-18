@@ -61,6 +61,13 @@ function initBridge() {
             }
 
             bridge.request_initial_data();
+
+            // The Program list only contains apps that are currently playing audio.
+            // Re-enumerate whenever the user returns to this window (e.g. alt-tabs
+            // back from the game), so a game launched after startup shows up without
+            // having to Start the radar first.
+            window.addEventListener("focus", () => AR.refreshPrograms());
+
             resolve();
         });
     });
@@ -103,8 +110,15 @@ function onProfilesChanged(jsonStr) {
 
 function onProgramsChanged(jsonStr) {
     const progs = JSON.parse(jsonStr);
+    const sel = document.getElementById("program-select");
+    const prev = sel ? sel.value : "all";
     fillSelect("program-select", [{ value: "all", label: "All (system audio)" },
         ...progs.map(p => ({ value: p, label: p }))]);
+    // Keep the user's current choice when the list refreshes on dropdown-open.
+    if (sel) {
+        const stillThere = Array.from(sel.options).some(o => o.value === prev);
+        sel.value = stillThere ? prev : "all";
+    }
 }
 
 // Mono-output state: device list + VB-CABLE detection + current selection.
@@ -251,6 +265,12 @@ window.AR = {
         // Backend method may not exist yet - guard it.
         if (bridge.set_program) bridge.set_program(value);
         else console.log("set_program not wired yet; selected:", value);
+    },
+
+    refreshPrograms() {
+        // Re-enumerate live audio programs when the dropdown is opened, so the
+        // game shows up even if it started playing after the app launched.
+        if (bridge.refresh_programs) bridge.refresh_programs();
     },
 
     // ── Mono output ────────────────────────────────────────────────

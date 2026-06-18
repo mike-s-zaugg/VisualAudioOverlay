@@ -168,7 +168,7 @@
                 <div class="field">
                     <div class="field-label"><span>Program</span></div>
                     <div class="select-wrap">
-                        <select id="program-select" class="select" onchange="AR.setProgram(this.value)"></select>
+                        <select id="program-select" class="select" onmousedown="AR.refreshPrograms()" onfocus="AR.refreshPrograms()" onchange="AR.setProgram(this.value)"></select>
                     </div>
                 </div>
 
