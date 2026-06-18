@@ -297,8 +297,9 @@
             <h2 id="mono-modal-title" class="modal-title">Mono Output Setup</h2>
             <p class="modal-intro">
                 Hear the whole game through your working ear while the radar still
-                shows direction. This replaces the Windows "mono audio" setting,
-                which would otherwise stop the overlay from detecting direction.
+                shows direction. AudioRadar does the mono mix for you, so you turn
+                <b>off</b> the Windows "mono audio" setting (leaving it on hides the
+                direction the overlay needs). Follow the 5 steps below once.
             </p>
 
             <div class="field">
@@ -308,7 +309,7 @@
                         onchange="AR.setMonoOutput(this.value)"></select>
                 </div>
                 <div class="device-sub" style="margin-top:6px">
-                    Pick your real headphones (not the virtual cable).
+                    Pick your real headphones here, not the virtual cable.
                 </div>
             </div>
 
@@ -318,10 +319,16 @@
                 onclick="AR.installCable()">Install VB-CABLE</button>
 
             <ol class="mono-steps">
-                <li>Install VB-CABLE (button above) and <b>reboot</b> if prompted.</li>
-                <li>In Windows Sound settings (Volume mixer), set your game's
-                    output to <b>CABLE Input</b>.</li>
-                <li>Choose your game under <b>Program</b>, then hit <b>Start</b>.</li>
+                <li>Install VB-CABLE (button above if shown), then <b>reboot</b>
+                    if Windows asks.</li>
+                <li>Turn <b>off</b> Windows mono audio:
+                    <b>Settings &rsaquo; Accessibility &rsaquo; Audio</b>.
+                    AudioRadar handles mono now.</li>
+                <li>Send your game's sound into the cable:
+                    <b>Settings &rsaquo; System &rsaquo; Sound &rsaquo; Volume mixer</b>,
+                    find your game, set its output to <b>CABLE Input</b>.</li>
+                <li>Above, set <b>"Mono plays to"</b> to your real headphones.</li>
+                <li>Pick your game under <b>Program</b>, then press <b>Start</b>.</li>
             </ol>
 
             <button class="btn-toggle btn-toggle--small mono-done"
