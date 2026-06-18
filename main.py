@@ -124,6 +124,7 @@ class Bridge(QObject):
     overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
     monoStateChanged = pyqtSignal(str)         # mono-output devices + cable state as JSON
     updateAvailable = pyqtSignal(str, str)     # (latest_version, release_page_url)
+    appearanceChanged = pyqtSignal(str)        # saved overlay accent colour + thickness as JSON
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -236,11 +237,11 @@ class Bridge(QObject):
     # ── Overlay Appearance ────────────────────────────────────────────
     @pyqtSlot(str)
     def set_accent_color(self, hex_color: str):
-        self._app.overlay.set_accent_color(hex_color)
+        self._app.set_accent_color(hex_color)
 
     @pyqtSlot(int)
     def set_stroke_width(self, width: int):
-        self._app.overlay.set_stroke_width(width)
+        self._app.set_stroke_width(width)
 
     # ── Profiles ──────────────────────────────────────────────────────
     @pyqtSlot(str)
@@ -292,6 +293,9 @@ class Bridge(QObject):
         # Running audio programs (for per-app capture)
         self._app.emit_programs()
 
+        # Overlay appearance (accent colour + thickness), restored from settings
+        self._app.emit_appearance()
+
         # Overlay position
         self._app.emit_overlay_position()
 
@@ -323,6 +327,14 @@ class AudioRadarApp(QMainWindow):
 
         # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar()
+
+        # Overlay appearance (accent colour + stroke). Persisted in settings.json so
+        # the look survives restarts; applied to the overlay now and pushed to the
+        # dashboard via emit_appearance() on load. Default matches the UI swatch.
+        self.accent_color = self.settings.get("accent_color") or "#9751F2"
+        self.stroke_width = int(self.settings.get("stroke_width", 6))
+        self.overlay.set_accent_color(self.accent_color)
+        self.overlay.set_stroke_width(self.stroke_width)
 
         # Audio thread (starts idle, no capture yet)
         self.audio_thread = AudioCaptureThread()
@@ -403,6 +415,27 @@ class AudioRadarApp(QMainWindow):
     def emit_programs(self):
         names = [p["name"] for p in self.list_programs()]
         self.bridge.programsChanged.emit(json.dumps(names))
+
+    # ── Overlay appearance (accent colour + stroke) ───────────────────
+    def set_accent_color(self, hex_color: str):
+        self.accent_color = hex_color or "#9751F2"
+        self.overlay.set_accent_color(self.accent_color)
+        self.settings["accent_color"] = self.accent_color
+        self._save_settings()
+
+    def set_stroke_width(self, width: int):
+        self.stroke_width = int(width)
+        self.overlay.set_stroke_width(self.stroke_width)
+        self.settings["stroke_width"] = self.stroke_width
+        self._save_settings()
+
+    def emit_appearance(self):
+        """Push the saved accent colour + thickness to the dashboard on load so the
+        picker/slider/preview match the overlay (and what was saved last session)."""
+        self.bridge.appearanceChanged.emit(json.dumps({
+            "color": self.accent_color,
+            "thickness": self.stroke_width,
+        }))
 
     # ── Mono output (single-sided listeners) ──────────────────────────
     def set_mono_enabled(self, enabled: bool):

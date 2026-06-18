@@ -24,7 +24,10 @@ class OverlayRadar(QWidget):
         
         self.resize(300, 300)
         
-        self.accent_color = QColor(255, 80, 20)
+        # Default accent must match the dashboard's default swatch (#9751F2) so the
+        # first Start looks the same as the UI shows, even before the user touches
+        # the colour picker.
+        self.accent_color = QColor("#9751F2")
         self.stroke_width = 6
         self.blips = []
         

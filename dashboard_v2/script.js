@@ -54,6 +54,7 @@ function initBridge() {
             if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
             if (bridge.monoStateChanged) bridge.monoStateChanged.connect(onMonoStateChanged);
             if (bridge.updateAvailable) bridge.updateAvailable.connect(onUpdateAvailable);
+            if (bridge.appearanceChanged) bridge.appearanceChanged.connect(onAppearanceChanged);
 
             // Show the current version in the footer.
             if (bridge.get_app_version) {
@@ -119,6 +120,25 @@ function onProgramsChanged(jsonStr) {
         const stillThere = Array.from(sel.options).some(o => o.value === prev);
         sel.value = stillThere ? prev : "all";
     }
+}
+
+// Saved overlay appearance (accent colour + thickness) restored from settings.json.
+// Setting an input's value programmatically does NOT fire its oninput, so this never
+// loops back into a re-save.
+function onAppearanceChanged(jsonStr) {
+    const a = JSON.parse(jsonStr);
+    if (a.color) {
+        const ac = document.getElementById("accent-color");
+        if (ac) ac.value = a.color;
+        updateColorReadout(a.color);
+    }
+    if (a.thickness != null) {
+        const th = document.getElementById("thickness");
+        if (th) th.value = a.thickness;
+        setText("thickness-val", a.thickness + " px");
+        setFill("thickness", a.thickness, 1, 20);
+    }
+    drawPreview();
 }
 
 // Mono-output state: device list + VB-CABLE detection + current selection.
