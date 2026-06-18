@@ -22,11 +22,24 @@ class AudioCaptureThread(QThread):
         # via WASAPI process loopback. None = whole-system loopback (soundcard).
         self.target_pid = target_pid
         self.target_name = target_name
+        # Mono output: when enabled, the raw (unfiltered) captured audio is also
+        # summed to mono and played to `mono_device` for single-sided listeners.
+        # Read at thread start (like target); toggle via the app before Start.
+        self.mono_enabled = False
+        self.mono_device = None
+        self._mono = None
 
     def set_target(self, pid, name=None):
         """Choose the capture source. Only takes effect before the thread starts."""
         self.target_pid = pid
         self.target_name = name
+
+    def set_mono(self, enabled, device=None):
+        """Enable/disable the mono down-mix output and pick its playback device.
+        Only takes effect before the thread starts (the thread is recreated on
+        each Start, so the app re-applies this in start_radar)."""
+        self.mono_enabled = bool(enabled)
+        self.mono_device = device or None
 
     def set_sensitivity(self, sensitivity):
         self.sensitivity = sensitivity
@@ -62,10 +75,43 @@ class AudioCaptureThread(QThread):
     def run(self):
         # Per-app capture takes the process-loopback path; otherwise capture the
         # whole system mix the way we always have.
-        if self.target_pid:
-            self._run_process_loopback()
-        else:
-            self._run_system_loopback()
+        self._start_mono()
+        try:
+            if self.target_pid:
+                self._run_process_loopback()
+            else:
+                self._run_system_loopback()
+        finally:
+            self._stop_mono()
+
+    # ── Mono down-mix output ───────────────────────────────────────────
+    def _start_mono(self):
+        if not self.mono_enabled:
+            return
+        try:
+            from mono_output import MonoMixThread
+            self._mono = MonoMixThread(device_name=self.mono_device,
+                                       samplerate=self.samplerate)
+            self._mono.failed.connect(lambda msg: print(f"Mono output error: {msg}"))
+            self._mono.start()
+            print(f"Mono output on -> {self.mono_device or 'default device'}")
+        except Exception as e:
+            print(f"Mono output unavailable ({e}); continuing without it.")
+            self._mono = None
+
+    def _feed_mono(self, data):
+        """Send the RAW (pre-bandpass) chunk to the mono player so the user hears
+        the full game audio, not just the filtered footstep band."""
+        if self._mono is not None:
+            self._mono.feed(data)
+
+    def _stop_mono(self):
+        if self._mono is not None:
+            try:
+                self._mono.stop()
+            except Exception:
+                pass
+            self._mono = None
 
     def _run_process_loopback(self):
         """Capture a single program's audio. Falls back to system audio on failure."""
@@ -90,6 +136,7 @@ class AudioCaptureThread(QThread):
         try:
             while self.running:
                 data = cap.read(2400)
+                self._feed_mono(data)
                 self._process_chunk(data, use_surround=False)
         except Exception as e:
             print(f"Process loopback capture error: {e}")
@@ -153,10 +200,12 @@ class AudioCaptureThread(QThread):
                 print(f"Channels: {raw_channels} | Mode: {mode}")
                 self.device_info_signal.emit(device.name, effective)
                 
+                self._feed_mono(first_data)
                 self._process_chunk(first_data, use_surround)
-                
+
                 while self.running:
                     data = mic.record(numframes=2400)
+                    self._feed_mono(data)
                     self._process_chunk(data, use_surround)
                     
         except RuntimeError as e:

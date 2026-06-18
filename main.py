@@ -5,8 +5,8 @@ import os
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, QThread
+from PyQt6.QtGui import QColor, QIcon
 
 from audio_capture import AudioCaptureThread
 from overlay import OverlayRadar
@@ -36,6 +36,24 @@ _candidates = [
 DASHBOARD_FILE = next((p for p in _candidates if os.path.exists(p)), _candidates[0])
 print(f"Dashboard: {DASHBOARD_FILE}  (exists: {os.path.exists(DASHBOARD_FILE)})")
 
+# App icon (window/taskbar). Bundled under assets/ via the PyInstaller spec, so
+# it resolves against RESOURCE_DIR both in dev and inside the packaged .exe.
+APP_ICON = os.path.join(RESOURCE_DIR, "assets", "icon.ico")
+
+# ── Version + project links ─────────────────────────────────────────────────
+# APP_VERSION must match the GitHub release tag (without the leading "v") for the
+# update check to compare correctly. Bump this for every release you tag.
+APP_VERSION = "0.2.0"
+REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay"
+# Latest-release JSON (no auth needed; 60 req/hr per IP is plenty for one check
+# per launch). Used by the in-app update check to reach users who already have
+# the app installed - we have no telemetry/emails, so this is the only channel.
+REPO_LATEST_RELEASE_API = (
+    "https://api.github.com/repos/mike-s-zaugg/VisualAudioOverlay/releases/latest"
+)
+# Where the footer "Send feedback" link goes: a prefilled new-issue form.
+FEEDBACK_URL = REPO_URL + "/issues/new/choose"
+
 SOUND_PRESETS = {
     "All Sounds":           {"freq_low": 20,  "freq_high": 20000, "max_amp": 1.0},
     "Footsteps - CS2":      {"freq_low": 100, "freq_high": 900,   "max_amp": 0.15},
@@ -52,6 +70,49 @@ SOUND_PRESETS = {
 # Python pushes updates to JS via signals, which JS subscribes to:
 #   bridge.statusChanged.connect(function(msg, isActive) { ... })
 
+def _parse_version(tag: str):
+    """'v0.2.1' or '0.2.1' -> (0, 2, 1). Non-numeric parts become 0 so a weird
+    tag never crashes the check. Returns () if nothing parseable."""
+    nums = []
+    for part in tag.lstrip("vV").split("."):
+        digits = "".join(c for c in part if c.isdigit())
+        if digits == "":
+            break
+        nums.append(int(digits))
+    return tuple(nums)
+
+
+class UpdateCheckThread(QThread):
+    """Fetches the latest GitHub release tag on a background thread and, if it is
+    newer than APP_VERSION, emits (version, html_url). Fails silently on any
+    error (offline, rate-limited, GitHub down) so it is never intrusive."""
+
+    updateFound = pyqtSignal(str, str)   # (latest_version, release_page_url)
+
+    def run(self):
+        try:
+            import json as _json
+            import urllib.request
+
+            req = urllib.request.Request(
+                REPO_LATEST_RELEASE_API,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": f"VisualAudioOverlay/{APP_VERSION}",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+
+            tag = (data.get("tag_name") or "").strip()
+            url = data.get("html_url") or REPO_URL + "/releases/latest"
+            if tag and _parse_version(tag) > _parse_version(APP_VERSION):
+                self.updateFound.emit(tag.lstrip("vV"), url)
+        except Exception as e:
+            # Silent by design - a failed update check must never bother the user.
+            print(f"Update check skipped: {e}")
+
+
 class Bridge(QObject):
     # Signals → pushed to JS
     statusChanged   = pyqtSignal(str, bool)   # (message, isActive)
@@ -61,6 +122,8 @@ class Bridge(QObject):
     presetsChanged  = pyqtSignal(str)          # list of preset names as JSON
     programsChanged = pyqtSignal(str)          # running audio programs as JSON
     overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
+    monoStateChanged = pyqtSignal(str)         # mono-output devices + cable state as JSON
+    updateAvailable = pyqtSignal(str, str)     # (latest_version, release_page_url)
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -110,6 +173,42 @@ class Bridge(QObject):
     def set_program(self, value: str):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
         self._app.selected_program = None if value in ("", "all") else value
+
+    # ── Mono output (single-sided listeners) ──────────────────────────
+    @pyqtSlot(bool)
+    def set_mono_enabled(self, enabled: bool):
+        """Turn the in-app mono down-mix on/off. Applied on the next Start."""
+        self._app.set_mono_enabled(enabled)
+
+    @pyqtSlot(str)
+    def set_mono_output(self, device: str):
+        """Choose which real device the mono mix plays to. '' = system default."""
+        self._app.set_mono_output(device)
+
+    @pyqtSlot()
+    def refresh_mono_devices(self):
+        self._app.emit_mono_state()
+
+    @pyqtSlot()
+    def install_vbcable(self):
+        """Launch the bundled VB-CABLE installer (UAC-elevated) so mono output can
+        route the game away from the headphones. Falls back to the download page
+        if the installer isn't bundled in this build."""
+        self._app.install_vbcable()
+
+    # ── Project links / about ─────────────────────────────────────────
+    @pyqtSlot(result=str)
+    def get_app_version(self) -> str:
+        return APP_VERSION
+
+    @pyqtSlot(str)
+    def open_url(self, url: str):
+        """Open an external link (footer: star/feedback/contribute, or the update
+        banner) in the user's real browser - not inside this QWebEngine window.
+        Guarded to https:// only so JS can't be coaxed into launching anything."""
+        if isinstance(url, str) and url.startswith("https://"):
+            import webbrowser
+            webbrowser.open(url)
 
     @pyqtSlot(bool)
     def set_overlay_drag_enabled(self, enabled: bool):
@@ -189,6 +288,9 @@ class Bridge(QObject):
         # Overlay position
         self._app.emit_overlay_position()
 
+        # Mono-output devices + VB-CABLE detection
+        self._app.emit_mono_state()
+
 
 # ── Main Application ────────────────────────────────────────────────────────
 
@@ -196,6 +298,8 @@ class AudioRadarApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Visual Audio Overlay")
+        if os.path.exists(APP_ICON):
+            self.setWindowIcon(QIcon(APP_ICON))
         self.resize(1100, 720)
 
         self.invert_direction = False
@@ -204,6 +308,11 @@ class AudioRadarApp(QMainWindow):
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
         self.radar_active = False
+
+        # Mono output (single-sided listeners). Persisted in settings.json so the
+        # user's choice survives restarts; applied to the audio thread on Start.
+        self.mono_enabled = bool(self.settings.get("mono_enabled", False))
+        self.mono_device = self.settings.get("mono_device") or None
 
         # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar()
@@ -230,6 +339,14 @@ class AudioRadarApp(QMainWindow):
 
         # Load the dashboard HTML
         self.view.setUrl(QUrl.fromLocalFile(DASHBOARD_FILE))
+
+        # Check GitHub for a newer release in the background. If found, the bridge
+        # forwards it to JS, which shows a small dismissible "update available"
+        # banner. Silent on any failure - never blocks or nags. Kept as an
+        # attribute so the QThread isn't garbage-collected mid-run.
+        self.update_thread = UpdateCheckThread()
+        self.update_thread.updateFound.connect(self.bridge.updateAvailable)
+        self.update_thread.start()
 
     # ── Audio Callbacks ───────────────────────────────────────────────
     def on_audio_data(self, angle: float, intensity: float):
@@ -280,6 +397,64 @@ class AudioRadarApp(QMainWindow):
         names = [p["name"] for p in self.list_programs()]
         self.bridge.programsChanged.emit(json.dumps(names))
 
+    # ── Mono output (single-sided listeners) ──────────────────────────
+    def set_mono_enabled(self, enabled: bool):
+        self.mono_enabled = bool(enabled)
+        self.settings["mono_enabled"] = self.mono_enabled
+        self._save_settings()
+        self.emit_mono_state()
+
+    def set_mono_output(self, device: str):
+        self.mono_device = device or None
+        self.settings["mono_device"] = self.mono_device
+        self._save_settings()
+        self.emit_mono_state()
+
+    def emit_mono_state(self):
+        """Push the playback-device list + VB-CABLE detection + current selection
+        to the UI so it can render the mono setup card."""
+        try:
+            from mono_output import (list_output_devices, default_output_name,
+                                     detect_virtual_cable)
+            devices = list_output_devices()
+            default = default_output_name()
+            cable = detect_virtual_cable()
+        except Exception as e:
+            print(f"Mono device enumeration failed: {e}")
+            devices, default, cable = [], None, None
+
+        state = {
+            "devices": devices,
+            "default": default,
+            "cable": cable,            # None until VB-CABLE is installed
+            "enabled": self.mono_enabled,
+            "selected": self.mono_device,
+        }
+        self.bridge.monoStateChanged.emit(json.dumps(state))
+
+    def install_vbcable(self):
+        """Launch the bundled VB-CABLE installer with a UAC prompt. If the build
+        doesn't bundle it, open the official download page instead. The installer
+        shows its own UI on purpose (donationware terms + trust for the
+        anti-cheat-wary audience)."""
+        installer = os.path.join(RESOURCE_DIR, "vendor", "VBCABLE",
+                                 "VBCABLE_Setup_x64.exe")
+        if os.path.exists(installer):
+            try:
+                import shutil
+                import tempfile
+                import ctypes
+                # Copy out of the (onefile) bundle first: _MEIPASS is wiped when
+                # this app exits, which could break the installer mid-run.
+                tmp = os.path.join(tempfile.gettempdir(), "VBCABLE_Setup_x64.exe")
+                shutil.copyfile(installer, tmp)
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", tmp, None, None, 1)
+                return
+            except Exception as e:
+                print(f"VB-CABLE launch failed: {e}")
+        import webbrowser
+        webbrowser.open("https://vb-audio.com/Cable/")
+
     def _resolve_target(self):
         """Map the selected program name to a live PID. Returns (pid, name) or
         (None, None) for whole-system capture / if the program is gone."""
@@ -304,6 +479,8 @@ class AudioRadarApp(QMainWindow):
         # configure the idle thread before starting it.
         pid, name = self._resolve_target()
         self.audio_thread.set_target(pid, name)
+        # Re-apply mono config (the thread is recreated fresh on each Start).
+        self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
 
         if not self.audio_thread.isRunning():
             self.audio_thread.start()
@@ -440,7 +617,22 @@ class AudioRadarApp(QMainWindow):
 
 
 if __name__ == "__main__":
+    # Windows groups taskbar buttons (and picks their icon) by AppUserModelID.
+    # Without an explicit ID, a `python main.py` launch shows the generic Python
+    # icon in the taskbar even though setWindowIcon is set. Declaring our own ID
+    # makes Windows treat this as a standalone app and use our icon there too.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "VisualAudioOverlay.App"
+            )
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
+    if os.path.exists(APP_ICON):
+        app.setWindowIcon(QIcon(APP_ICON))
     window = AudioRadarApp()
     window.show()
     sys.exit(app.exec())

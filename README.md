@@ -44,6 +44,11 @@ radar overlay that floats over your game on your main screen.
   API; pick **All (system audio)** to capture everything as before.
 - **Game-specific presets.** Built-in frequency band-pass filters (CS2, Valorant,
   Fortnite, and more) isolate footsteps and ignore useless low-end rumble.
+- **Mono output for single-sided listeners.** Optionally play a mono down-mix of
+  the game to your headphones so you hear everything through your working ear,
+  while the overlay still shows full left/right direction. This replaces the
+  Windows "mono audio" setting (which would otherwise blind the overlay). Needs a
+  one-time virtual-cable setup; see [Mono output](#mono-output-single-sided-listeners).
 - **Smart audio boost.** Amplifies quiet, distant sounds so faint cues still register.
 - **Stereo and surround.** 7.1 / multi-channel headsets unlock 360 degree front/back
   detection; stereo headsets run in left/right mode automatically.
@@ -85,6 +90,31 @@ Requires **Windows 10 (build 19041+)** and **Python 3.10+**.
    audio. Leave it on **All (system audio)** to capture everything. The program
    must already be playing sound to appear in the list.
 5. Hit **Start** in the Radar panel. The overlay appears on your selected monitor.
+
+## Mono output (single-sided listeners)
+
+If you are deaf or hard of hearing in one ear, you normally have to switch on the
+Windows "mono audio" setting to avoid missing sounds panned to your bad side. But
+that setting sums left and right together *before* the radar can read them, so the
+overlay loses all sense of direction. Mono Output solves this: the app keeps
+Windows in stereo (so the overlay still works) and produces the mono mix itself.
+
+To hear that mono mix without also hearing the game's original stereo at the same
+time, the game's audio has to be routed away from your headphones and into a
+virtual audio cable, which the app then reads. We use **VB-CABLE** for this.
+
+**One-time setup:**
+
+1. In the **Mono Output** switch (Hardware panel), turn it on. If VB-CABLE isn't
+   installed, click **Install VB-CABLE**, approve the prompt, and **reboot**.
+2. In Windows **Settings > System > Sound > Volume mixer** (App volume and device
+   preferences), set your game's **Output** to **CABLE Input**.
+3. Back in the app, pick your real headphones as the Mono Output device, choose
+   your game under **Program**, and hit **Start**.
+
+> Mono Output uses **VB-CABLE**, a product of **VB-Audio Software**
+> (www.vb-cable.com). VB-CABLE is donationware - donations are welcome. See
+> [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Build a standalone .exe
 

@@ -12,14 +12,31 @@
  *   set_stroke_width(int), save_profile(jsonStr), delete_profile(str),
  *   request_initial_data()
  *
- * NEW (backend TODO - guarded so the UI works before they exist):
- *   set_program(str)            - per-app capture target ([[per-app-capture]])
+ *   set_program(str)            - per-app capture target
  *   programsChanged(jsonStr)    - list of running audio programs
+ *
+ * Mono output (single-sided listeners) - guarded so the UI works without them:
+ *   set_mono_enabled(bool)      - turn the in-app mono down-mix on/off
+ *   set_mono_output(str)        - which real device the mono mix plays to
+ *   install_vbcable()           - launch the bundled VB-CABLE installer
+ *   monoStateChanged(jsonStr)   - {devices, default, cable, enabled, selected}
  * ═══════════════════════════════════════════════════════════════════════
  */
 
 let radarActive = false;
 let moveModeActive = false;
+
+// Project links (opened in the real browser via bridge.open_url). The update
+// banner overrides updateUrl when a specific release page is known.
+const REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay";
+const FEEDBACK_URL = REPO_URL + "/issues/new/choose";
+const CONTRIBUTE_URL = REPO_URL + "/blob/main/CONTRIBUTING.md";
+const COFFEE_URL = "https://buymeacoffee.com/mikezaugg";
+let updateUrl = REPO_URL + "/releases/latest";
+
+function openExternal(url) {
+    if (bridge && bridge.open_url) bridge.open_url(url);
+}
 
 // ── Bridge init ────────────────────────────────────────────────────────
 function initBridge() {
@@ -33,13 +50,27 @@ function initBridge() {
             bridge.monitorsChanged.connect(onMonitorsChanged);
             bridge.presetsChanged.connect(onPresetsChanged);
             bridge.overlayPositionChanged.connect(onOverlayPositionChanged);
-            // Optional new signal - only connect if the backend provides it.
+            // Optional new signals - only connect if the backend provides them.
             if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
+            if (bridge.monoStateChanged) bridge.monoStateChanged.connect(onMonoStateChanged);
+            if (bridge.updateAvailable) bridge.updateAvailable.connect(onUpdateAvailable);
+
+            // Show the current version in the footer.
+            if (bridge.get_app_version) {
+                bridge.get_app_version(function (v) { setText("footer-version", "v" + v); });
+            }
 
             bridge.request_initial_data();
             resolve();
         });
     });
+}
+
+// Backend found a newer GitHub release. Show the dismissible banner.
+function onUpdateAvailable(version, url) {
+    if (url) updateUrl = url;
+    setText("update-banner-text", "Version " + version + " is available.");
+    toggleClass("update-banner", "is-hidden", false);
 }
 
 // ── Signal handlers (Python → JS) ──────────────────────────────────────
@@ -74,6 +105,46 @@ function onProgramsChanged(jsonStr) {
     const progs = JSON.parse(jsonStr);
     fillSelect("program-select", [{ value: "all", label: "All (system audio)" },
         ...progs.map(p => ({ value: p, label: p }))]);
+}
+
+// Mono-output state: device list + VB-CABLE detection + current selection.
+function onMonoStateChanged(jsonStr) {
+    const s = JSON.parse(jsonStr);
+
+    const opts = [
+        { value: "", label: "System default" + (s.default ? ` (${s.default})` : "") },
+        ...(s.devices || []).map(d => ({ value: d, label: d })),
+    ];
+    fillSelect("mono-output-select", opts);
+    const sel = document.getElementById("mono-output-select");
+    if (sel) sel.value = s.selected || "";
+
+    const cb = document.getElementById("mono-enabled");
+    if (cb) cb.checked = !!s.enabled;
+
+    // Compact hint shown in the HARDWARE card (the full setup lives in the modal).
+    const hint = document.getElementById("mono-hint");
+    if (hint) {
+        const where = s.selected || (s.default ? "default device" : "default");
+        const state = s.enabled ? `On - ${where}` : "Off";
+        hint.innerHTML =
+            `${state} <a href="#" class="mono-setup-link" ` +
+            `onclick="AR.openMonoSetup(); return false;">Setup</a>`;
+    }
+
+    // Cable status + install button live in the modal (which scrolls, so no clip).
+    const status = document.getElementById("mono-status");
+    const installBtn = document.getElementById("mono-install-btn");
+    if (s.cable) {
+        if (status) status.innerHTML =
+            `<span class="ok">Virtual cable detected:</span> ${s.cable}`;
+        if (installBtn) installBtn.classList.add("is-hidden");
+    } else {
+        if (status) status.innerHTML =
+            `<span class="warn">No virtual cable found.</span> Install VB-CABLE to ` +
+            `route your game's audio without hearing it twice.`;
+        if (installBtn) installBtn.classList.remove("is-hidden");
+    }
 }
 
 function onOverlayPositionChanged(jsonStr) {
@@ -182,6 +253,23 @@ window.AR = {
         else console.log("set_program not wired yet; selected:", value);
     },
 
+    // ── Mono output ────────────────────────────────────────────────
+    setMonoEnabled(on) {
+        if (bridge.set_mono_enabled) bridge.set_mono_enabled(!!on);
+        if (on) AR.openMonoSetup();      // first enable: walk them through setup
+    },
+
+    setMonoOutput(value) {
+        if (bridge.set_mono_output) bridge.set_mono_output(value);
+    },
+
+    openMonoSetup() { toggleClass("mono-modal", "is-hidden", false); },
+    closeMonoSetup() { toggleClass("mono-modal", "is-hidden", true); },
+
+    installCable() {
+        if (bridge.install_vbcable) bridge.install_vbcable();
+    },
+
     toggleMoveMode() {
         bridge.set_overlay_drag_enabled(!moveModeActive);
     },
@@ -206,6 +294,14 @@ window.AR = {
         bridge.set_stroke_width(parseInt(val));
         drawPreview();
     },
+
+    // ── Footer support links + update banner ──────────────────────────
+    openRepo() { openExternal(REPO_URL); },
+    openFeedback() { openExternal(FEEDBACK_URL); },
+    openContribute() { openExternal(CONTRIBUTE_URL); },
+    openCoffee() { openExternal(COFFEE_URL); },
+    openUpdate() { openExternal(updateUrl); },
+    dismissUpdate() { toggleClass("update-banner", "is-hidden", true); },
 };
 
 // Apply a saved profile's values to the controls and push to Python.
@@ -275,6 +371,7 @@ function updateDualFill() {
 
 // ── Small helpers ──────────────────────────────────────────────────────
 function setText(id, txt) { const el = document.getElementById(id); if (el) el.textContent = txt; }
+function toggleClass(id, cls, on) { const el = document.getElementById(id); if (el) el.classList.toggle(cls, on); }
 function intVal(id, def) { const el = document.getElementById(id); return el ? parseInt(el.value) : def; }
 
 function fillSelect(id, opts) {
