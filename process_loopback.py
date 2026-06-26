@@ -393,22 +393,72 @@ class ProcessLoopbackCapture:
 
 
 # ── Program enumeration ────────────────────────────────────────────────────
+def _sessions_all_render_devices():
+    """Yield AudioSession objects across *every* active render endpoint.
+
+    pycaw's AudioUtilities.GetAllSessions() only looks at the default playback
+    device, so an app routed elsewhere (e.g. a game sent to VB-CABLE for the mono
+    path) never shows up. We enumerate all ACTIVE render endpoints and pull the
+    sessions from each so the app appears regardless of which output it plays to.
+    """
+    import comtypes
+    from pycaw.utils import AudioSession
+    from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+    from pycaw.api.audiopolicy import IAudioSessionManager2, IAudioSessionControl2
+    from pycaw.constants import CLSID_MMDeviceEnumerator, EDataFlow, DEVICE_STATE
+
+    enumerator = comtypes.CoCreateInstance(
+        CLSID_MMDeviceEnumerator, IMMDeviceEnumerator,
+        comtypes.CLSCTX_INPROC_SERVER)
+    devices = enumerator.EnumAudioEndpoints(
+        EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)
+
+    for i in range(devices.GetCount()):
+        dev = devices.Item(i)
+        if dev is None:
+            continue
+        try:
+            mgr = dev.Activate(
+                IAudioSessionManager2._iid_, comtypes.CLSCTX_ALL, None
+            ).QueryInterface(IAudioSessionManager2)
+            session_enum = mgr.GetSessionEnumerator()
+        except Exception:
+            continue  # some endpoints refuse a session manager - skip them
+        for j in range(session_enum.GetCount()):
+            ctl = session_enum.GetSession(j)
+            if ctl is None:
+                continue
+            try:
+                ctl2 = ctl.QueryInterface(IAudioSessionControl2)
+            except Exception:
+                continue
+            if ctl2 is not None:
+                yield AudioSession(ctl2)
+
+
 def list_audio_programs() -> list[dict]:
     """
     Running programs that currently have an audio session, as
     [{"name": "Chrome", "pid": 1234}, ...] sorted by name.
 
-    Note: a program only shows up once it has opened an audio stream. The PID is
-    a hint; resolve it freshly at capture time since PIDs can change.
+    Scans every active render endpoint (not just the default device) so a program
+    routed to a non-default output - e.g. a game sent to VB-CABLE for the mono
+    path - still appears. Note: a program only shows up once it has opened an
+    audio stream. The PID is a hint; resolve it freshly at capture time since
+    PIDs can change.
     """
-    from pycaw.utils import AudioUtilities
+    try:
+        sessions = list(_sessions_all_render_devices())
+    except Exception:
+        # Fall back to the default-device-only enumeration if the multi-device
+        # scan fails for any reason, so the dropdown never goes empty.
+        try:
+            from pycaw.utils import AudioUtilities
+            sessions = AudioUtilities.GetAllSessions()
+        except Exception:
+            return []
 
     found = {}
-    try:
-        sessions = AudioUtilities.GetAllSessions()
-    except Exception:
-        return []
-
     for s in sessions:
         proc = getattr(s, "Process", None)
         if not proc:
@@ -420,7 +470,8 @@ def list_audio_programs() -> list[dict]:
         if not name:
             continue
         friendly = name[:-4] if name.lower().endswith(".exe") else name
-        # First PID seen for a given program name wins (dedupe multi-process apps).
+        # First PID seen for a given program name wins (dedupe multi-process apps
+        # and the same app appearing on more than one endpoint).
         found.setdefault(friendly, getattr(s, "ProcessId", proc.pid))
 
     return [{"name": k, "pid": v}
