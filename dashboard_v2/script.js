@@ -55,6 +55,7 @@ function initBridge() {
             if (bridge.monoStateChanged) bridge.monoStateChanged.connect(onMonoStateChanged);
             if (bridge.updateAvailable) bridge.updateAvailable.connect(onUpdateAvailable);
             if (bridge.appearanceChanged) bridge.appearanceChanged.connect(onAppearanceChanged);
+            if (bridge.presetApplied) bridge.presetApplied.connect(onPresetApplied);
 
             // Show the current version in the footer.
             if (bridge.get_app_version) {
@@ -147,6 +148,26 @@ function onAppearanceChanged(jsonStr) {
         setFill("thickness", a.thickness, 1, 20);
     }
     drawPreview();
+}
+
+// A built-in preset was applied in Python: move the frequency + max-amp sliders
+// and their readouts so the change is visible (the backend is already updated).
+// Setting an input's value in JS doesn't fire its oninput, so this won't loop
+// back into the bridge - the backend was set authoritatively by apply_preset.
+function onPresetApplied(jsonStr) {
+    const p = JSON.parse(jsonStr);
+    if (p.freq_low != null && p.freq_high != null) {
+        document.getElementById("freq-low").value = p.freq_low;
+        document.getElementById("freq-high").value = p.freq_high;
+        setText("freq-val", `${p.freq_low}-${p.freq_high} Hz`);
+        updateDualFill();
+    }
+    if (p.max_amp != null) {
+        const slider = Math.round(p.max_amp * 100);   // slider units = max_amp * 100
+        setSliderValue("max-amp", slider);
+        setText("max-amp-val", p.max_amp.toFixed(2));
+        setFill("max-amp", slider);
+    }
 }
 
 // Mono-output state: device list + VB-CABLE detection + current selection.

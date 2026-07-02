@@ -129,6 +129,7 @@ class Bridge(QObject):
     monoStateChanged = pyqtSignal(str)         # mono-output devices + cable state as JSON
     updateAvailable = pyqtSignal(str, str)     # (latest_version, release_page_url)
     appearanceChanged = pyqtSignal(str)        # saved overlay accent colour + thickness as JSON
+    presetApplied = pyqtSignal(str)            # preset's freq/max_amp, so JS moves the sliders
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -146,25 +147,24 @@ class Bridge(QObject):
     # ── Audio Settings ────────────────────────────────────────────────
     @pyqtSlot(float)
     def set_sensitivity(self, val: float):
-        self._app.audio_thread.set_sensitivity(val)
+        self._app.set_audio_param("sensitivity", val)
 
     @pyqtSlot(float)
     def set_gain(self, val: float):
-        self._app.audio_thread.set_gain(val)
+        self._app.set_audio_param("gain", val)
 
     @pyqtSlot(int, int)
     def set_freq_range(self, low: int, high: int):
-        self._app.audio_thread.set_freq_range(low, high)
+        self._app.set_audio_param("freq_low", low)
+        self._app.set_audio_param("freq_high", high)
 
     @pyqtSlot(float)
     def set_max_amplitude(self, val: float):
-        self._app.audio_thread.set_max_amplitude(val)
+        self._app.set_audio_param("max_amp", val)
 
     @pyqtSlot(str)
     def apply_preset(self, name: str):
-        p = SOUND_PRESETS.get(name, SOUND_PRESETS["All Sounds"])
-        self._app.audio_thread.set_freq_range(p["freq_low"], p["freq_high"])
-        self._app.audio_thread.set_max_amplitude(p["max_amp"])
+        self._app.apply_preset(name)
 
     @pyqtSlot(bool)
     def set_invert(self, invert: bool):
@@ -326,6 +326,20 @@ class AudioRadarApp(QMainWindow):
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
         self.radar_active = False
+
+        # Live audio parameters, held here as the source of truth so they survive
+        # thread recreation. The capture thread is rebuilt fresh (with library
+        # defaults) on every Stop and on every mid-session restart, so these are
+        # re-applied in _start_capture_thread - otherwise a preset would silently
+        # revert to "all frequencies" after the first stop/start. Defaults match
+        # the dashboard's initial slider positions.
+        self.audio_settings = {
+            "sensitivity": 0.005,   # sens slider 50 / 10000
+            "gain": 1.0,            # gain slider 10 / 10
+            "freq_low": 150,        # freq slider default (matches SOUND_PRESETS)
+            "freq_high": 4000,
+            "max_amp": 1.0,         # max-amp slider 100 / 100
+        }
 
         # Mono output (single-sided listeners). Persisted in settings.json so the
         # user's choice survives restarts; applied to the audio thread on Start.
@@ -542,14 +556,47 @@ class AudioRadarApp(QMainWindow):
             return None, None
         return pid, self.selected_program
 
+    # ── Audio parameters (source of truth, survive thread recreation) ──
+    def _apply_audio_settings_to_thread(self):
+        """Push the current audio parameters onto the (possibly freshly created)
+        capture thread. Called on every start so a recreated thread doesn't come
+        up with library defaults instead of the user's preset/sliders."""
+        s = self.audio_settings
+        self.audio_thread.set_sensitivity(s["sensitivity"])
+        self.audio_thread.set_gain(s["gain"])
+        self.audio_thread.set_freq_range(s["freq_low"], s["freq_high"])
+        self.audio_thread.set_max_amplitude(s["max_amp"])
+
+    def set_audio_param(self, key: str, value):
+        """Update one live audio parameter. Stored on the app (so it survives a
+        thread restart) and applied to the running thread immediately."""
+        self.audio_settings[key] = value
+        self._apply_audio_settings_to_thread()
+
+    def apply_preset(self, name: str):
+        """Apply a built-in preset's frequency band + max amplitude, and echo the
+        values back to the dashboard so the sliders and readout actually move
+        (otherwise switching presets looks like it does nothing)."""
+        p = SOUND_PRESETS.get(name, SOUND_PRESETS["All Sounds"])
+        self.audio_settings["freq_low"] = p["freq_low"]
+        self.audio_settings["freq_high"] = p["freq_high"]
+        self.audio_settings["max_amp"] = p["max_amp"]
+        self._apply_audio_settings_to_thread()
+        self.bridge.presetApplied.emit(json.dumps({
+            "freq_low": p["freq_low"],
+            "freq_high": p["freq_high"],
+            "max_amp": p["max_amp"],
+        }))
+
     # ── Radar Control ─────────────────────────────────────────────────
     def _start_capture_thread(self):
-        """Configure the idle thread (target/mono are read at thread start) and
-        start it. Shared by Start and by mid-session capture restarts."""
+        """Configure the idle thread (target/mono/params are read at thread start)
+        and start it. Shared by Start and by mid-session capture restarts."""
         # Resolve the capture target fresh (PIDs change between launches).
         pid, name = self._resolve_target()
         self.audio_thread.set_target(pid, name)
         self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
+        self._apply_audio_settings_to_thread()
 
         if not self.audio_thread.isRunning():
             self.audio_thread.start()
