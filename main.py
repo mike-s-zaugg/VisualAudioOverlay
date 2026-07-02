@@ -40,7 +40,7 @@ APP_ICON = os.path.join(RESOURCE_DIR, "assets", "icon.png")
 # ── Version + project links ─────────────────────────────────────────────────
 # APP_VERSION must match the GitHub release tag (without the leading "v") for the
 # update check to compare correctly. Bump this for every release you tag.
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay"
 # Latest-release JSON (no auth needed; 60 req/hr per IP is plenty for one check
 # per launch). Used by the in-app update check to reach users who already have
