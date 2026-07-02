@@ -3,6 +3,8 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 
+from direction import angle_diff
+
 class OverlayRadar(QWidget):
     positionChanged = pyqtSignal(int, int)   # committed position (persist to disk)
     positionPreview = pyqtSignal(int, int)   # live drag frames (UI readout only)
@@ -31,9 +33,10 @@ class OverlayRadar(QWidget):
         self.stroke_width = 6
         self.blips = []
         
+        # Started/stopped with visibility (show/hideEvent) so the 30ms repaint
+        # tick doesn't keep running while the overlay is hidden.
         self.decay_timer = QTimer(self)
         self.decay_timer.timeout.connect(self.decay_signal)
-        self.decay_timer.start(30)
 
     def _apply_window_flags(self):
         flags = self.base_window_flags
@@ -63,7 +66,13 @@ class OverlayRadar(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.decay_timer.start(30)
         self._remove_win11_border()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.decay_timer.stop()
+        self.blips = []
 
     def _remove_win11_border(self):
         """
@@ -151,7 +160,9 @@ class OverlayRadar(QWidget):
         
         found = False
         for blip in self.blips:
-            if abs(blip['angle'] - angle) < 20.0:
+            # angle_diff wraps at +-180 so a sound directly behind the player
+            # (surround: -179 vs +179) refreshes one blip instead of two.
+            if angle_diff(blip['angle'], angle) < 20.0:
                 blip['life'] = max(blip['life'], clamped_intensity)
                 found = True
                 break

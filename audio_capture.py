@@ -1,12 +1,17 @@
 import numpy as np
 import soundcard as sc
 from PyQt6.QtCore import QThread, pyqtSignal
-import math
 import time
+
+from direction import band_rms, stereo_angle, surround_angle
 
 class AudioCaptureThread(QThread):
     audio_data_signal = pyqtSignal(float, float)
     device_info_signal = pyqtSignal(str, int)
+    # Human-readable capture problems (device gone, no loopback, fallbacks).
+    # The app forwards these to the dashboard status line so failures are
+    # visible to the user, not just printed to a console nobody sees.
+    status_signal = pyqtSignal(str)
 
     def __init__(self, sensitivity=0.005, gain=1.0, freq_low=20, freq_high=20000, max_amplitude=1.0,
                  target_pid=None, target_name=None):
@@ -53,24 +58,6 @@ class AudioCaptureThread(QThread):
     
     def set_max_amplitude(self, max_amp):
         self.max_amplitude = max_amp
-
-    def _bandpass(self, data):
-        """Apply frequency-domain bandpass filter to audio data."""
-        if self.freq_low <= 20 and self.freq_high >= 20000:
-            return data  # No filtering needed
-        
-        filtered = np.copy(data)
-        for ch in range(data.shape[1]):
-            fft = np.fft.rfft(data[:, ch])
-            freqs = np.fft.rfftfreq(len(data[:, ch]), d=1.0/self.samplerate)
-            
-            # Zero out frequencies outside the band
-            mask = (freqs >= self.freq_low) & (freqs <= self.freq_high)
-            fft[~mask] = 0
-            
-            filtered[:, ch] = np.fft.irfft(fft, n=len(data[:, ch]))
-        
-        return filtered
 
     def run(self):
         # Per-app capture takes the process-loopback path; otherwise capture the
@@ -119,6 +106,7 @@ class AudioCaptureThread(QThread):
             from process_loopback import ProcessLoopbackCapture
         except Exception as e:
             print(f"Process loopback unavailable ({e}); using system audio.")
+            self.status_signal.emit("Per-app capture unavailable - using system audio")
             self._run_system_loopback()
             return
 
@@ -127,6 +115,7 @@ class AudioCaptureThread(QThread):
             cap.start()
         except Exception as e:
             print(f"Process loopback failed ({e}); using system audio.")
+            self.status_signal.emit("Per-app capture failed - using system audio")
             self._run_system_loopback()
             return
 
@@ -140,6 +129,9 @@ class AudioCaptureThread(QThread):
                 self._process_chunk(data, use_surround=False)
         except Exception as e:
             print(f"Process loopback capture error: {e}")
+            if self.running:
+                self.status_signal.emit(
+                    f"Capture of {label} stopped unexpectedly - restart the radar")
         finally:
             cap.close()
 
@@ -150,6 +142,8 @@ class AudioCaptureThread(QThread):
             
             if not loopbacks:
                 print("No loopback device found.")
+                self.status_signal.emit(
+                    "No audio output device found - the radar can't capture anything")
                 return
             
             # Pick device by priority
@@ -179,6 +173,8 @@ class AudioCaptureThread(QThread):
             print(f"Error in audio capture: {e}")
             import traceback
             traceback.print_exc()
+            if self.running:
+                self.status_signal.emit(f"Audio capture error: {e}")
 
     def _capture_loop(self, device, all_loopbacks):
         try:
@@ -210,6 +206,9 @@ class AudioCaptureThread(QThread):
                     
         except RuntimeError as e:
             print(f"Device '{device.name}' failed: {e}")
+            if self.running:
+                self.status_signal.emit(
+                    f"Audio device '{device.name}' failed - trying another output")
             for lb in all_loopbacks:
                 if lb.name == device.name or "Microphone" in lb.name:
                     continue
@@ -217,47 +216,36 @@ class AudioCaptureThread(QThread):
                     time.sleep(0.5)
                     self._capture_loop(lb, [])
                     return
-                except:
+                except Exception:
                     continue
+            # Fallbacks exhausted (or none to try): tell the user instead of
+            # leaving a radar that silently never blips again.
+            if self.running and all_loopbacks:
+                self.status_signal.emit(
+                    "All audio devices failed - stop and restart the radar")
     
     def _process_chunk(self, data, use_surround):
-        # Apply bandpass filter
-        data = self._bandpass(data)
-        
-        gain = self.gain
-        intensity = 0.0
+        # Band-limited per-channel RMS (Hann-windowed FFT + Parseval; the
+        # direction math only ever needs levels, never a filtered waveform).
+        rms = band_rms(data, self.samplerate, self.freq_low, self.freq_high) * self.gain
+
         angle_deg = 0.0
-        
+
         if use_surround and data.shape[1] >= 6:
-            fl = float(np.sqrt(np.mean(data[:, 0]**2))) * gain
-            fr = float(np.sqrt(np.mean(data[:, 1]**2))) * gain
-            c  = float(np.sqrt(np.mean(data[:, 2]**2))) * gain
-            rl = float(np.sqrt(np.mean(data[:, 4]**2))) * gain
-            rr = float(np.sqrt(np.mean(data[:, 5]**2))) * gain
-            
-            x = (fr + rr) - (fl + rl)
-            y = (fl + fr + c) - (rl + rr)
-            
+            fl, fr, c = float(rms[0]), float(rms[1]), float(rms[2])
+            rl, rr = float(rms[4]), float(rms[5])
             intensity = max(fl, fr, c, rl, rr)
             if intensity > self.sensitivity and intensity < self.max_amplitude:
-                angle_deg = math.degrees(math.atan2(x, y))
-        
+                angle_deg = surround_angle(fl, fr, c, rl, rr)
+
         elif data.shape[1] >= 2:
-            left_rms = float(np.sqrt(np.mean(data[:, 0]**2))) * gain
-            right_rms = float(np.sqrt(np.mean(data[:, 1]**2))) * gain
-            
+            left_rms, right_rms = float(rms[0]), float(rms[1])
             intensity = max(left_rms, right_rms)
-            
             if intensity > self.sensitivity and intensity < self.max_amplitude:
-                balance = (right_rms - left_rms) / (right_rms + left_rms + 1e-6)
-                sign = 1.0 if balance >= 0 else -1.0
-                amplified = sign * (abs(balance) ** 0.3)
-                angle_deg = amplified * 90.0
+                angle_deg = stereo_angle(left_rms, right_rms)
         else:
-            mono_rms = float(np.sqrt(np.mean(data[:, 0]**2))) * gain
-            intensity = mono_rms
-            angle_deg = 0.0
-            
+            intensity = float(rms[0])
+
         if intensity > self.sensitivity and intensity < self.max_amplitude:
             self.audio_data_signal.emit(float(angle_deg), float(intensity))
 

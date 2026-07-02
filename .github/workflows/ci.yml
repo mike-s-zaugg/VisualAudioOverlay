@@ -25,4 +25,26 @@ jobs:
         run: ruff check --select E9,F63,F7,F82 .
 
       - name: Compile all Python files
-        run: python -m compileall -q main.py audio_capture.py overlay.py
+        run: >-
+          python -m compileall -q
+          main.py audio_capture.py overlay.py
+          process_loopback.py mono_output.py direction.py
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # direction.py is deliberately dependency-light (numpy only, no Qt or
+      # audio devices) so the math tests can run on Linux CI.
+      - name: Install test dependencies
+        run: pip install numpy pytest
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -q
