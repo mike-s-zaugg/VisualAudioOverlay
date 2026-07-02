@@ -52,7 +52,8 @@ radar overlay that floats over your game on your main screen.
 - **Smart audio boost.** Amplifies quiet, distant sounds so faint cues still register.
 - **Stereo and surround.** 7.1 / multi-channel headsets unlock 360 degree front/back
   detection; stereo headsets run in left/right mode automatically.
-- **Saveable presets.** Store per-game sensitivities and filter setups and switch in one click.
+- **Saveable presets.** Store a full per-game setup - sensitivities, filters, the
+  captured program, monitor, mono output, and radar look - and switch in one click.
 - **Full customization.** Pick the radar's accent color and line thickness, with a
   live preview that matches exactly what shows up in game.
 - **Non-intrusive by design.** It does not inject into game memory or modify any game

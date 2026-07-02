@@ -25,15 +25,9 @@ else:
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
-# Prefer the new dashboard_v2 UI, then index.html next to main.py, then the
-# original dashboard/ (kept as a fallback). Resolved against RESOURCE_DIR so it
-# works both in dev and inside the packaged .exe.
-_candidates = [
-    os.path.join(RESOURCE_DIR, "dashboard_v2", "index.html"),
-    os.path.join(RESOURCE_DIR, "index.html"),
-    os.path.join(RESOURCE_DIR, "dashboard", "index.html"),
-]
-DASHBOARD_FILE = next((p for p in _candidates if os.path.exists(p)), _candidates[0])
+# Resolved against RESOURCE_DIR so it works both in dev and inside the
+# packaged .exe.
+DASHBOARD_FILE = os.path.join(RESOURCE_DIR, "dashboard_v2", "index.html")
 print(f"Dashboard: {DASHBOARD_FILE}  (exists: {os.path.exists(DASHBOARD_FILE)})")
 
 # App icon (window/taskbar). Use the PNG, not the .ico: QIcon(".ico") needs Qt's
@@ -57,13 +51,20 @@ REPO_LATEST_RELEASE_API = (
 # Where the footer "Send feedback" link goes: a prefilled new-issue form.
 FEEDBACK_URL = REPO_URL + "/issues/new/choose"
 
+# Footstep bands rev. 2026-07-02, based on spectral analysis of the actual CS2
+# footstep assets (extracted from pak01_dir.vpk) plus published EQ guidance for
+# the other games. Key findings: footstep energy spans ~150Hz-4kHz (soft/wet
+# surfaces and cloth movement sit at 900Hz-8kHz, which the old 800-1000Hz caps
+# cut off entirely), while rifle fire concentrates ABOVE 4kHz - so a 4kHz cap
+# keeps gunshots out of band and max_amp handles their loudness. The 150Hz low
+# cut sheds rumble/explosion low end.
 SOUND_PRESETS = {
     "All Sounds":           {"freq_low": 20,  "freq_high": 20000, "max_amp": 1.0},
-    "Footsteps - CS2":      {"freq_low": 100, "freq_high": 900,   "max_amp": 0.15},
-    "Footsteps - Valorant": {"freq_low": 80,  "freq_high": 1000,  "max_amp": 0.12},
-    "Footsteps - Fortnite": {"freq_low": 120, "freq_high": 800,   "max_amp": 0.18},
-    "Footsteps - General":  {"freq_low": 100, "freq_high": 800,   "max_amp": 0.15},
-    "Custom":               {"freq_low": 100, "freq_high": 800,   "max_amp": 1.0},
+    "Footsteps - CS2":      {"freq_low": 150, "freq_high": 4000,  "max_amp": 0.15},
+    "Footsteps - Valorant": {"freq_low": 150, "freq_high": 4000,  "max_amp": 0.12},
+    "Footsteps - Fortnite": {"freq_low": 150, "freq_high": 5000,  "max_amp": 0.18},
+    "Footsteps - General":  {"freq_low": 150, "freq_high": 4000,  "max_amp": 0.15},
+    "Custom":               {"freq_low": 150, "freq_high": 4000,  "max_amp": 1.0},
 }
 
 
@@ -176,7 +177,7 @@ class Bridge(QObject):
     @pyqtSlot(str)
     def set_program(self, value: str):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
-        self._app.selected_program = None if value in ("", "all") else value
+        self._app.set_program(None if value in ("", "all") else value)
 
     @pyqtSlot()
     def refresh_programs(self):
@@ -188,7 +189,7 @@ class Bridge(QObject):
     # ── Mono output (single-sided listeners) ──────────────────────────
     @pyqtSlot(bool)
     def set_mono_enabled(self, enabled: bool):
-        """Turn the in-app mono down-mix on/off. Applied on the next Start."""
+        """Turn the in-app mono down-mix on/off. Applies live while running."""
         self._app.set_mono_enabled(enabled)
 
     @pyqtSlot(str)
@@ -249,7 +250,10 @@ class Bridge(QObject):
     # ── Profiles ──────────────────────────────────────────────────────
     @pyqtSlot(str)
     def save_profile(self, json_str: str):
-        """Expects JSON: { name, sensitivity, gain, preset, freq_low, freq_high, max_amp, invert }"""
+        """Expects JSON with at least { name } plus whatever the UI captures:
+        sensitivity, gain, preset, freq_low, freq_high, max_amp, invert, and
+        (since richer profiles) program, monitor, mono_enabled, mono_device,
+        accent_color, thickness. Older profiles missing keys still load."""
         try:
             data = json.loads(json_str)
             name = data.get("name", "").strip()
@@ -340,9 +344,7 @@ class AudioRadarApp(QMainWindow):
         self.overlay.set_stroke_width(self.stroke_width)
 
         # Audio thread (starts idle, no capture yet)
-        self.audio_thread = AudioCaptureThread()
-        self.audio_thread.audio_data_signal.connect(self.on_audio_data)
-        self.audio_thread.device_info_signal.connect(self.on_device_info)
+        self._new_audio_thread()
 
         # Bridge object exposed to JS
         self.bridge = Bridge(self)
@@ -380,6 +382,19 @@ class AudioRadarApp(QMainWindow):
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
 
+    def on_capture_status(self, message: str):
+        """Capture-thread problems (device lost, fallback taken) surfaced on the
+        dashboard status line instead of only the console."""
+        self.bridge.statusChanged.emit(message, self.radar_active)
+
+    def _new_audio_thread(self):
+        """QThreads aren't restartable, so a fresh (idle) thread is created here
+        on init, after every Stop, and on every mid-session capture restart."""
+        self.audio_thread = AudioCaptureThread()
+        self.audio_thread.audio_data_signal.connect(self.on_audio_data)
+        self.audio_thread.device_info_signal.connect(self.on_device_info)
+        self.audio_thread.status_signal.connect(self.on_capture_status)
+
     def on_overlay_position_changed(self, x: int, y: int):
         self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
         self._save_settings()
@@ -406,6 +421,13 @@ class AudioRadarApp(QMainWindow):
         self.bridge.overlayPositionChanged.emit(json.dumps(state))
 
     # ── Programs (per-app capture) ────────────────────────────────────
+    def set_program(self, program):
+        """Change the capture target. Applies live when the radar is running."""
+        if program == self.selected_program:
+            return
+        self.selected_program = program
+        self._restart_capture_if_active()
+
     def list_programs(self):
         """Running programs with an audio session. Safe to call on the GUI thread."""
         try:
@@ -442,16 +464,24 @@ class AudioRadarApp(QMainWindow):
 
     # ── Mono output (single-sided listeners) ──────────────────────────
     def set_mono_enabled(self, enabled: bool):
-        self.mono_enabled = bool(enabled)
+        enabled = bool(enabled)
+        changed = enabled != self.mono_enabled
+        self.mono_enabled = enabled
         self.settings["mono_enabled"] = self.mono_enabled
         self._save_settings()
         self.emit_mono_state()
+        if changed:
+            self._restart_capture_if_active()
 
     def set_mono_output(self, device: str):
-        self.mono_device = device or None
+        device = device or None
+        changed = device != self.mono_device
+        self.mono_device = device
         self.settings["mono_device"] = self.mono_device
         self._save_settings()
         self.emit_mono_state()
+        if changed:
+            self._restart_capture_if_active()
 
     def emit_mono_state(self):
         """Push the playback-device list + VB-CABLE detection + current selection
@@ -513,16 +543,12 @@ class AudioRadarApp(QMainWindow):
         return pid, self.selected_program
 
     # ── Radar Control ─────────────────────────────────────────────────
-    def start_radar(self):
-        self.radar_active = True
-        self.overlay.show()
-        self._place_overlay_for_start()
-
-        # Resolve the capture target fresh (PIDs change between launches), then
-        # configure the idle thread before starting it.
+    def _start_capture_thread(self):
+        """Configure the idle thread (target/mono are read at thread start) and
+        start it. Shared by Start and by mid-session capture restarts."""
+        # Resolve the capture target fresh (PIDs change between launches).
         pid, name = self._resolve_target()
         self.audio_thread.set_target(pid, name)
-        # Re-apply mono config (the thread is recreated fresh on each Start).
         self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
 
         if not self.audio_thread.isRunning():
@@ -536,8 +562,23 @@ class AudioRadarApp(QMainWindow):
         else:
             self.bridge.statusChanged.emit("Radar is active", True)
 
+    def start_radar(self):
+        self.radar_active = True
+        self.overlay.show()
+        self._place_overlay_for_start()
+        self._start_capture_thread()
         # Refresh the program list so newly launched apps show up next time.
         self.emit_programs()
+
+    def _restart_capture_if_active(self):
+        """Program/mono choices only take effect when the capture thread starts,
+        so apply a mid-session change by restarting the thread in place. The
+        overlay stays up; only the capture source blips out for a moment."""
+        if not self.radar_active:
+            return
+        self.audio_thread.stop()
+        self._new_audio_thread()
+        self._start_capture_thread()
 
     def stop_radar(self):
         self.radar_active = False
@@ -546,9 +587,7 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.stop()
 
         # Create a fresh thread ready for next start
-        self.audio_thread = AudioCaptureThread()
-        self.audio_thread.audio_data_signal.connect(self.on_audio_data)
-        self.audio_thread.device_info_signal.connect(self.on_device_info)
+        self._new_audio_thread()
 
         self.bridge.statusChanged.emit("Radar stopped", False)
         self.emit_overlay_position()
