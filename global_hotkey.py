@@ -116,7 +116,7 @@ class BinderBackend(GlobalHotkeyBackend):
     Windows backend is one; tests drive it with a fake registrar."""
 
     # Internal, connected queued: the platform callback (a native event filter
-    # on Windows) only posts, and the overlay toggle runs from the event loop
+    # on Windows) only posts, and the action (Start/Stop) runs from the event loop
     # like any other slot rather than inside the native message dispatch.
     _pressed = pyqtSignal(str)
 

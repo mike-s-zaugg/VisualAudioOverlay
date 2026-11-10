@@ -1,6 +1,7 @@
 // Toggle hotkey tests for dashboard_v2/script.js: reading key presses into a
 // canonical combination, the capture flow (listeners, bridge calls), rendering
-// of every hotkeyChanged state, and the "Radar hidden" status line.
+// of every hotkeyChanged state, the radar status following statusChanged from
+// any source (button or hotkey), and the new version notice in the footer.
 //
 // Run:  node tests/test_hotkey_ui.js   (exit 0 = pass)
 //
@@ -312,7 +313,7 @@ check("set_hotkey_capture(false) once", J(callsTo("set_hotkey_capture")) === '[[
 check("no set_toggle_hotkey", callsTo("set_toggle_hotkey").length === 0, J(calls));
 check("capture ended, listeners removed", !W.isHotkeyCapturing() && captureListeners() === 0);
 check("button shows the binding again", text("hotkey-btn") === "Ctrl+Shift+H", text("hotkey-btn"));
-check("hint back to idle", text("hotkey-hint") === "Shows or hides the radar while you play.", text("hotkey-hint"));
+check("hint back to idle", text("hotkey-hint") === "Starts or stops the radar while you play.", text("hotkey-hint"));
 check("modal stays open after Esc in capture", !hidden("hotkey-modal"));
 // A second Esc (not capturing) closes the modal through its own listener.
 doc.fire("keydown", key(27));
@@ -377,8 +378,8 @@ section("render: ok");
 reset();
 check("card button", text("hotkey-btn") === "Ctrl+Shift+H" && !hidden("hotkey-btn"), text("hotkey-btn"));
 check("readout hidden", hidden("hotkey-readout"));
-check("idle hint", text("hotkey-hint") === "Shows or hides the radar while you play.", text("hotkey-hint"));
-check("button title explains it", /Shows or hides the radar/.test(els["hotkey-btn"].attrs.title || ""), J(els["hotkey-btn"].attrs));
+check("idle hint", text("hotkey-hint") === "Starts or stops the radar while you play.", text("hotkey-hint"));
+check("button title explains it", /Starts or stops the radar/.test(els["hotkey-btn"].attrs.title || ""), J(els["hotkey-btn"].attrs));
 check("button aria-label names the binding", /Ctrl\+Shift\+H/.test(els["hotkey-btn"].attrs["aria-label"] || ""));
 check("rendering calls nothing", calls.length === 0, J(calls));
 
@@ -446,7 +447,7 @@ check("effective is what is shown", text("hotkey-btn") === "Ctrl+Shift+H (system
 
 section("render: unknown state");
 reset({ state: "something-new" });
-check("treated as bound", text("hotkey-btn") === "Ctrl+Shift+H" && text("hotkey-hint") === "Shows or hides the radar while you play.",
+check("treated as bound", text("hotkey-btn") === "Ctrl+Shift+H" && text("hotkey-hint") === "Starts or stops the radar while you play.",
     text("hotkey-btn") + " / " + text("hotkey-hint"));
 
 section("hotkeyChanged while waiting");
@@ -471,47 +472,87 @@ check("junk keeps the previous binding", text("hotkey-btn") === "Ctrl+Shift+H" &
 W.onHotkeyChanged('{"state":"conflict","error":"Taken."}');
 check("partial payload merges with the rest", text("hotkey-btn") === "Ctrl+Shift+H" && text("hotkey-hint") === "Taken.",
     text("hotkey-btn") + " / " + text("hotkey-hint"));
-for (const bad of ["", "{", "null", "[]", '{"hidden":"yes"}', undefined, "{}"]) {
-    let threw = null;
-    try { W.onOverlayVisibilityChanged(bad); } catch (err) { threw = err; }
-    check(`visibility ${J(bad)} does not throw`, threw === null, String(threw));
-}
 check("rendering made no bridge call", calls.length === 0, J(calls));
 
-// ── 8. Hidden status line ──────────────────────────────────────────────
-section("hidden radar status");
+// ── 8. The hotkey starts and stops the radar ───────────────────────────
+// Python handles the key press and reports the result through the normal
+// statusChanged, exactly like a click on Start/End. Nothing here may depend
+// on the change having come from a click.
+section("radar started and stopped by the hotkey (no click)");
 reset();
 W.onStatusChanged("Radar active - capturing cs2.exe", true);
-check("status shown", text("status-text") === "Radar active - capturing cs2.exe", text("status-text"));
-W.onOverlayVisibilityChanged(J({ hidden: true, radar_active: true }));
-check("hidden text names the key", text("status-text") === "Radar hidden. Press Ctrl+Shift+H to show it.", text("status-text"));
-check("dot keeps the running state", els["status-dot"].classList.contains("status-dot--on")
-    && !els["status-dot"].classList.contains("status-dot--off"));
-W.onStatusChanged("'cs2.exe' has no audio - using system audio", true);
-check("statusChanged while hidden keeps the hidden text", text("status-text") === "Radar hidden. Press Ctrl+Shift+H to show it.", text("status-text"));
-hk({ combo: "F9", effective: "F9" });
-check("hidden text follows a new binding", text("status-text") === "Radar hidden. Press F9 to show it.", text("status-text"));
-W.onOverlayVisibilityChanged(J({ hidden: false, radar_active: true }));
-check("shown again: the latest status message returns", text("status-text") === "'cs2.exe' has no audio - using system audio", text("status-text"));
-
-section("hidden status edge cases");
-reset({ combo: "", effective: "", state: "unbound" });
-W.onStatusChanged("Radar is active", true);
-W.onOverlayVisibilityChanged(J({ hidden: true, radar_active: true }));
-check("no key bound", text("status-text") === "Radar hidden. Press your hotkey to show it.", text("status-text"));
-W.onOverlayVisibilityChanged(J({ hidden: false }));
-check("restored", text("status-text") === "Radar is active", text("status-text"));
-W.onOverlayVisibilityChanged(J({ hidden: true, radar_active: false }));
-check("hidden but radar not active: normal status", text("status-text") === "Radar is active", text("status-text"));
-reset();
-W.onStatusChanged("Radar is active", true);
-W.onOverlayVisibilityChanged(J({ hidden: true, radar_active: true }));
+check("status line shows the message as given", text("status-text") === "Radar active - capturing cs2.exe", text("status-text"));
+check("button says End", text("btn-toggle") === "End" && els["btn-toggle"].classList.contains("is-active"), text("btn-toggle"));
+check("dot on", els["status-dot"].classList.contains("status-dot--on") && !els["status-dot"].classList.contains("status-dot--off"));
+clearCalls();
+W.AR.toggleRadar();
+check("a click after a hotkey start stops the radar", J(calls) === '[["stop_radar"]]', J(calls));
 W.onStatusChanged("Radar stopped", false);
-check("radar stopped while hidden: stopped status shown", text("status-text") === "Radar stopped", text("status-text"));
-check("dot off", els["status-dot"].classList.contains("status-dot--off"));
-check("no bridge call from status handling", calls.length === 0, J(calls));
+check("stopped by the hotkey: status line", text("status-text") === "Radar stopped", text("status-text"));
+check("button says Start", text("btn-toggle") === "Start" && !els["btn-toggle"].classList.contains("is-active"), text("btn-toggle"));
+check("dot off", els["status-dot"].classList.contains("status-dot--off") && !els["status-dot"].classList.contains("status-dot--on"));
+clearCalls();
+W.AR.toggleRadar();
+check("a click after a hotkey stop starts the radar", J(calls) === '[["start_radar"]]', J(calls));
+W.onStatusChanged("Radar active - capturing cs2.exe", true);
+hk({ combo: "F9", effective: "F9" });
+check("a hotkeyChanged leaves the status line alone", text("status-text") === "Radar active - capturing cs2.exe", text("status-text"));
+check("the hidden state is gone", typeof W.onOverlayVisibilityChanged === "undefined" && typeof W.hiddenStatusText === "undefined");
 
-// ── 9. Without a bridge (local preview / older backend) ────────────────
+section("Python refuses Alt+F4");
+const ALT_F4 = "Alt+F4 closes windows, so it cannot be used as the hotkey.";
+reset();
+W.AR.startHotkeyCapture(); clearCalls();
+press(115, "alt");
+check("Alt+F4 is sent like any valid combination", J(callsTo("set_toggle_hotkey")) === '[["set_toggle_hotkey","Alt+F4"]]', J(calls));
+hk({ state: "invalid", requested: "Alt+F4", error: ALT_F4 });
+check("Python's sentence is shown as given", text("hotkey-hint") === ALT_F4, text("hotkey-hint"));
+check("the previous binding stays on the button", text("hotkey-btn") === "Ctrl+Shift+H" && text("hotkey-capture-btn") === "Ctrl+Shift+H");
+
+// ── 9. New version notice in the footer ────────────────────────────────
+section("new version notice");
+const html = fs.readFileSync(path.join(__dirname, "..", "dashboard_v2", "index.html"), "utf8");
+const footer = html.slice(html.indexOf('<footer class="footer">'), html.indexOf("</footer>"));
+check("the notice is in the footer", footer.includes('id="update-notice"'));
+check("it sits right before the version number",
+    /id="update-notice"[\s\S]*<\/span>\s*<span class="footer-version" id="footer-version">/.test(footer)
+    && footer.indexOf('id="update-notice"') < footer.indexOf('id="footer-version"'));
+check("hidden by default", /<span id="update-notice" class="[^"]*\bis-hidden\b/.test(footer));
+check("Download link uses the existing openUpdate path", /class="footer-update-link"[\s\S]*?AR\.openUpdate\(\)/.test(footer));
+check("Download link has a descriptive aria-label",
+    /class="footer-update-link"[^>]*aria-label="Download the new version"[^>]*>Download<\/a>/.test(footer));
+check("the old bar is gone", !html.includes("update-banner") && !src.includes("update-banner")
+    && !fs.readFileSync(path.join(__dirname, "..", "dashboard_v2", "style.css"), "utf8").includes("update-banner"));
+check("no dismiss any more", typeof W.AR.dismissUpdate === "undefined");
+
+els["update-notice"] = new Generic("update-notice");
+els["update-notice"].classList.add("is-hidden");
+els["update-notice-text"] = Object.assign(new Generic("update-notice-text"), { textContent: "A new version is available" });
+clearCalls();
+W.AR.openUpdate();
+check("before any update: Download opens the latest release page",
+    J(calls) === J([["open_url", "https://github.com/mike-s-zaugg/VisualAudioOverlay/releases/latest"]]), J(calls));
+clearCalls();
+W.onUpdateAvailable("0.2.2", "https://github.com/mike-s-zaugg/VisualAudioOverlay/releases/tag/v0.2.2");
+check("shown", !hidden("update-notice"));
+check("version text", text("update-notice-text") === "Version 0.2.2 is available", text("update-notice-text"));
+check("showing it calls nothing", calls.length === 0, J(calls));
+W.AR.openUpdate();
+check("Download opens the stored release url through open_url",
+    J(calls) === J([["open_url", "https://github.com/mike-s-zaugg/VisualAudioOverlay/releases/tag/v0.2.2"]]), J(calls));
+W.onUpdateAvailable("0.2.2", "https://github.com/mike-s-zaugg/VisualAudioOverlay/releases/tag/v0.2.2");
+W.onUpdateAvailable("0.2.3", "");
+check("a repeat replaces the text, never appends", text("update-notice-text") === "Version 0.2.3 is available", text("update-notice-text"));
+check("still shown, nothing duplicated", !hidden("update-notice") && els["update-notice"].options.length === 0
+    && els["update-notice-text"].options.length === 0);
+clearCalls();
+W.AR.openUpdate();
+check("an empty url keeps the last known release page",
+    J(calls) === J([["open_url", "https://github.com/mike-s-zaugg/VisualAudioOverlay/releases/tag/v0.2.2"]]), J(calls));
+W.onUpdateAvailable("", "");
+check("no version: generic text", text("update-notice-text") === "A new version is available", text("update-notice-text"));
+
+// ── 10. Without a bridge (local preview / older backend) ───────────────
 section("without a bridge");
 reset();
 const savedBridge = sandbox.bridge;
@@ -529,19 +570,20 @@ sandbox.bridge = savedBridge;
 check("no exception", threw === null, String(threw));
 check("listeners cleaned up", captureListeners() === 0 && doc.count("keydown") === 0);
 
-// ── 10. House rules ────────────────────────────────────────────────────
+// ── 11. House rules (all of dashboard_v2) ──────────────────────────────
 section("house rules");
+const css = fs.readFileSync(path.join(__dirname, "..", "dashboard_v2", "style.css"), "utf8");
 const code = src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
 check("no timers or animation loops", !/\b(setTimeout|setInterval|requestAnimationFrame)\s*\(/.test(code));
-const html = fs.readFileSync(path.join(__dirname, "..", "dashboard_v2", "index.html"), "utf8");
-const hotkeyBits = [src.slice(src.indexOf("// ── Toggle hotkey"), src.indexOf("// ── Preset / profile dropdowns")),
-    html.slice(html.indexOf("<!-- Toggle hotkey"), html.indexOf("</section>", html.indexOf("<!-- Toggle hotkey"))),
-    html.slice(html.indexOf("<!-- ── Hotkey modal"), html.indexOf('<script src="script.js"'))];
+check("no CSS animations", !/@keyframes|\banimation\s*:/.test(css));
 const EM_DASH = String.fromCharCode(0x2014);
-check("no em dashes in the hotkey code and markup", hotkeyBits.every(s => s.length > 0 && !s.includes(EM_DASH)),
-    J(hotkeyBits.map(s => s.length)));
-check("no em dashes in this test file", !fs.readFileSync(__filename, "utf8").includes(EM_DASH));
+for (const [name, text] of [["script.js", src], ["index.html", html], ["style.css", css],
+    ["this test file", fs.readFileSync(__filename, "utf8")]]) {
+    check(`no em dashes in ${name}`, !text.includes(EM_DASH));
+}
 check("the old default is not shown anywhere", !src.includes("Ctrl+Shift+F9") && !html.includes("Ctrl+Shift+F9"));
+check("no copy left about showing or hiding the radar",
+    !/(show|hide)s? (or (show|hide)s? )?the radar|Radar hidden/i.test(src + html), "");
 
 console.log(failed === 0 ? "\nALL PASS" : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

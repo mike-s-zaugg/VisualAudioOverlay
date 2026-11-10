@@ -1,5 +1,5 @@
 """Hotkey combinations: parsing, validation, the Windows key table, and the
-binding state machine behind the toggle-overlay hotkey.
+binding state machine behind the hotkey that starts and stops the radar.
 
 Standard library only (no Qt, no ctypes) so the tests run on Linux CI.
 global_hotkey.py wraps this in a Qt object and adds the platform backends;
@@ -14,14 +14,15 @@ any value and never raises on bad input except where documented.
 
 from dataclasses import dataclass
 
-# Default binding for the toggle-overlay hotkey. Not a function key (the
+# Default binding for the Start/Stop hotkey. Not a function key (the
 # maintainer's call: games bind F-keys a lot) and not Ctrl+Alt, which Windows
 # treats as AltGr, so on some layouts the hotkey would swallow typed characters.
 DEFAULT_TOGGLE_HOTKEY = "Ctrl+Shift+H"
 
-# The one action bound today. Bindings are keyed by action id so more actions
-# can be added later without changing the backends.
-TOGGLE_OVERLAY = "toggle_overlay"
+# The one action bound today: start the radar when stopped, stop it when
+# running (the dashboard's Start/End button). Bindings are keyed by action id
+# so more actions can be added later without changing the backends.
+TOGGLE_RADAR = "toggle_radar"
 
 # Binding states, exactly as the dashboard contract names them.
 STATE_OK = "ok"                    # registered and active

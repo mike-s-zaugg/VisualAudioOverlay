@@ -29,12 +29,13 @@ class OverlayRadar(QWidget):
         self._perf = perf
 
         self.setWindowTitle("Visual Audio Overlay")
-        # The toggle hotkey shows this window while a game has focus, and the
-        # WM_HOTKEY that triggers it gives this process the right to take the
-        # foreground. So the overlay must never be activated: Tool windows are
-        # already shown without activation on Windows, WA_ShowWithoutActivating
-        # makes that explicit, and WindowDoesNotAcceptFocus (WS_EX_NOACTIVATE)
-        # also stops raise_() or a click in Move mode from activating it.
+        # The Start/Stop hotkey starts the radar, and so shows this window,
+        # while a game has focus, and the WM_HOTKEY that triggers it gives
+        # this process the right to take the foreground. So the overlay must
+        # never be activated: Tool windows are already shown without
+        # activation on Windows, WA_ShowWithoutActivating makes that explicit,
+        # and WindowDoesNotAcceptFocus (WS_EX_NOACTIVATE) also stops raise_()
+        # or a click in Move mode from activating it.
         # Mouse input still arrives without activation, so dragging works.
         self.base_window_flags = (
             Qt.WindowType.FramelessWindowHint |

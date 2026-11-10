@@ -179,7 +179,7 @@
                     <div class="field-label">
                         <span>Hotkey</span>
                         <button id="hotkey-btn" class="btn-toggle btn-toggle--small hotkey-btn"
-                            title="Shows or hides the radar while you play. Click to change."
+                            title="Starts or stops the radar while you play. Click to change."
                             aria-label="Hotkey: Ctrl+Shift+H. Click to change."
                             onclick="AR.startHotkeyCapture()">Ctrl+Shift+H</button>
                         <span id="hotkey-readout" class="device-sub hotkey-readout is-hidden"></span>
@@ -287,17 +287,6 @@
             </div>
         </section>
 
-        <!-- ── Update banner (hidden until a newer GitHub release is found) ──
-             Populated by onUpdateAvailable(); the whole bar is dismissible and
-             never reappears in this session. -->
-        <div id="update-banner" class="update-banner is-hidden">
-            <span id="update-banner-text" class="update-banner-text">A new version is available.</span>
-            <a href="#" class="update-banner-link"
-                onclick="AR.openUpdate(); return false;">Download</a>
-            <button class="update-banner-close" title="Dismiss"
-                onclick="AR.dismissUpdate()" aria-label="Dismiss">&times;</button>
-        </div>
-
         <!-- ── Footer: passive, non-intrusive support links ─────────────────
              No popups or nags - just always-there ghost links. Each opens in
              the real browser via bridge.open_url (not inside this webview). -->
@@ -331,6 +320,15 @@
                 </svg>
                 <span>Buy me a coffee</span>
             </a>
+            <!-- New version notice, left of the version number. Hidden until
+                 onUpdateAvailable(); it sits in the footer row, so showing it
+                 never makes the page or any card taller. -->
+            <span id="update-notice" class="footer-update is-hidden" role="status">
+                <span id="update-notice-text">A new version is available</span>
+                <a href="#" class="footer-update-link" title="Open the download page"
+                    aria-label="Download the new version"
+                    onclick="AR.openUpdate(); return false;">Download</a>
+            </span>
             <span class="footer-version" id="footer-version"></span>
         </footer>
 
@@ -410,7 +408,7 @@
                     </button>
                 </div>
                 <div id="hotkey-hint" class="device-sub hotkey-hint" role="status" aria-live="polite">
-                    Shows or hides the radar while you play.
+                    Starts or stops the radar while you play.
                 </div>
             </div>
 

@@ -273,7 +273,7 @@ class FakeRegistrar:
 
 def loaded(pref="Ctrl+Shift+H", **kw):
     reg = FakeRegistrar(**kw)
-    b = HotkeyBinder(hotkeys.TOGGLE_OVERLAY, reg)
+    b = HotkeyBinder(hotkeys.TOGGLE_RADAR, reg)
     status = b.load(pref)
     return b, reg, status
 
@@ -484,7 +484,7 @@ def test_shutdown_during_capture():
 
 def test_load_during_capture_does_not_register():
     reg = FakeRegistrar()
-    b = HotkeyBinder(hotkeys.TOGGLE_OVERLAY, reg)
+    b = HotkeyBinder(hotkeys.TOGGLE_RADAR, reg)
     b.suspend()
     s = b.load("Ctrl+Shift+H")
     assert s.capturing and reg.combos() == []

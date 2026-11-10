@@ -21,7 +21,7 @@ import global_hotkey  # noqa: E402
 import hotkeys  # noqa: E402
 
 SAFE_COMBO = "Ctrl+Alt+Shift+F24"
-ACTION = hotkeys.TOGGLE_OVERLAY
+ACTION = hotkeys.TOGGLE_RADAR
 
 
 @pytest.fixture(scope="module")

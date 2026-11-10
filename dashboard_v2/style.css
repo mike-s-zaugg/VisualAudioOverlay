@@ -564,34 +564,23 @@ body::before {
     opacity: 0.7;
 }
 
-/* ── Update banner (hidden until a newer release is found) ──────────── */
-.update-banner {
-    flex: none;
-    margin-top: 12px;
-    display: flex;
+/* ── New version notice (footer, left of the version number) ─────────
+   Hidden until a newer release is found. Same row and size as the footer,
+   so it never takes height from the cards. Text and link keep the look of
+   the old update bar: white text, accent Download link. When shown, the
+   notice takes over the push to the right from the version number. */
+.footer-update {
+    margin-left: auto;
+    display: inline-flex;
     align-items: center;
-    gap: 12px;
-    padding: 9px 14px;
-    border: 1px solid var(--accent);
-    border-radius: var(--radius-pill);
-    background: rgba(0, 157, 255, 0.08);
-    font-size: 13px;
+    gap: 8px;
+    color: var(--text);
+    white-space: nowrap;
 }
-.update-banner-text { color: var(--text); }
-.update-banner-link {
+.footer-update:not(.is-hidden) + .footer-version { margin-left: 0; }
+.footer-update-link {
     color: var(--accent);
     text-decoration: none;
     font-weight: 500;
 }
-.update-banner-link:hover { text-decoration: underline; }
-.update-banner-close {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    font-size: 18px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0 2px;
-}
-.update-banner-close:hover { color: var(--text); }
+.footer-update-link:hover { text-decoration: underline; }

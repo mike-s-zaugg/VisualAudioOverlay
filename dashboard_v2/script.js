@@ -39,7 +39,8 @@
  *                                 releases the current hotkey meanwhile)
  *   hotkeyChanged(jsonStr)      - {combo, state, effective, requested, error,
  *                                  capturing, can_choose}, every key optional
- *   overlayVisibilityChanged(jsonStr) - {hidden, radar_active}
+ *   The hotkey starts or stops the radar like the Start/End button; the result
+ *   arrives through the normal statusChanged.
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -47,7 +48,7 @@ let radarActive = false;
 let moveModeActive = false;
 
 // Project links (opened in the real browser via bridge.open_url). The update
-// banner overrides updateUrl when a specific release page is known.
+// notice overrides updateUrl when a specific release page is known.
 const REPO_URL = "https://github.com/mike-s-zaugg/VisualAudioOverlay";
 const FEEDBACK_URL = REPO_URL + "/issues/new/choose";
 const CONTRIBUTE_URL = REPO_URL + "/blob/main/CONTRIBUTING.md";
@@ -84,7 +85,6 @@ function initBridge() {
             } else {
                 toggleClass("hotkey-field", "is-hidden", true);
             }
-            if (bridge.overlayVisibilityChanged) bridge.overlayVisibilityChanged.connect(onOverlayVisibilityChanged);
 
             // Show the current version in the footer.
             if (bridge.get_app_version) {
@@ -111,21 +111,20 @@ function initBridge() {
     });
 }
 
-// Backend found a newer GitHub release. Show the dismissible banner.
+// Backend found a newer GitHub release. Show the notice in the footer, left of
+// the version number. It takes no extra height, so it needs no dismiss button.
 function onUpdateAvailable(version, url) {
     if (url) updateUrl = url;
-    setText("update-banner-text", "Version " + version + " is available.");
-    toggleClass("update-banner", "is-hidden", false);
+    setText("update-notice-text", version ? `Version ${version} is available` : "A new version is available");
+    toggleClass("update-notice", "is-hidden", false);
 }
 
 // ── Signal handlers (Python → JS) ──────────────────────────────────────
+// The only place the radar state is set: the Start/End button, the toggle
+// hotkey and the backend itself all end in this signal.
 function onStatusChanged(message, isActive) {
     radarActive = isActive;
-    // Kept so the line can return to it after the radar was hidden by the hotkey.
-    // While hidden, the hidden notice stays on screen (see renderStatusText).
-    lastStatusMessage = message;
-    if (!isActive) overlayHidden = false;    // a stopped radar is never "hidden"
-    renderStatusText();
+    setText("status-text", message);
     syncToggleUI();
 }
 
@@ -323,8 +322,6 @@ let hotkeyState = { combo: "", state: "", effective: "", requested: "", error: "
 let hotkeyCapturing = false;   // our keydown listener is attached
 let hotkeyCaptureHint = "";    // why the last key press was not accepted
 let hotkeyJustSet = "";        // combination we just asked for, to confirm it saved
-let overlayHidden = false;     // radar running but hidden with the hotkey
-let lastStatusMessage = null;  // last statusChanged text, restored after hiding
 
 const HOTKEY_TEXT = {
     capture: "Press keys...",
@@ -334,8 +331,8 @@ const HOTKEY_TEXT = {
     unavailable: "Not available",
 };
 const HOTKEY_HINT = {
-    idle: "Shows or hides the radar while you play.",
-    saved: "Saved. Press it in game to show or hide the radar.",
+    idle: "Starts or stops the radar while you play.",
+    saved: "Saved. Press it in game to start or stop the radar.",
     unbound: "No hotkey set. Click the button to pick one.",
     capture: "Press your keys now. Esc cancels, Backspace clears.",
     needModifier: "Add Ctrl or Alt, or use an F key.",
@@ -456,11 +453,6 @@ function hotkeyHintText(s, ctx) {
     return HOTKEY_HINT.idle;
 }
 
-// Status line while the radar is hidden with the hotkey.
-function hiddenStatusText(key) {
-    return key ? `Radar hidden. Press ${key} to show it.` : "Radar hidden. Press your hotkey to show it.";
-}
-
 function isHotkeyCapturing() { return hotkeyCapturing; }
 
 function onHotkeyChanged(jsonStr) {
@@ -468,29 +460,6 @@ function onHotkeyChanged(jsonStr) {
     // The binding can no longer be picked here: stop waiting for keys.
     if (hotkeyCapturing && !hotkeyCanChoose(hotkeyState)) AR.cancelHotkeyCapture();
     renderHotkey();
-    if (overlayHidden) renderStatusText();      // the hidden notice names the key
-}
-
-function onOverlayVisibilityChanged(jsonStr) {
-    let p = null;
-    try { p = typeof jsonStr === "string" ? JSON.parse(jsonStr) : jsonStr; } catch (e) { p = null; }
-    if (!p || typeof p !== "object") return;
-    if (typeof p.hidden !== "boolean") return;
-    overlayHidden = p.hidden && p.radar_active !== false;
-    renderStatusText();
-}
-
-// #status-text shows the hidden notice while hidden, else the last statusChanged.
-function renderStatusText() {
-    if (overlayHidden) {
-        if (lastStatusMessage === null) {
-            const el = document.getElementById("status-text");
-            lastStatusMessage = el ? el.textContent : "";
-        }
-        setText("status-text", hiddenStatusText(hotkeyState.effective || hotkeyState.combo));
-    } else if (lastStatusMessage !== null) {
-        setText("status-text", lastStatusMessage);
-    }
 }
 
 function setHidden(id, hidden) { toggleClass(id, "is-hidden", hidden); }
@@ -842,13 +811,12 @@ window.AR = {
         focusEl("hotkey-btn");
     },
 
-    // ── Footer support links + update banner ──────────────────────────
+    // ── Footer support links + update notice ──────────────────────────
     openRepo() { openExternal(REPO_URL); },
     openFeedback() { openExternal(FEEDBACK_URL); },
     openContribute() { openExternal(CONTRIBUTE_URL); },
     openCoffee() { openExternal(COFFEE_URL); },
     openUpdate() { openExternal(updateUrl); },
-    dismissUpdate() { toggleClass("update-banner", "is-hidden", true); },
 };
 
 // Apply a saved profile's values to the controls and push to Python. Note that
