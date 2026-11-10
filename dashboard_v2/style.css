@@ -473,6 +473,23 @@ body::before {
 
 .dpad-move { margin-bottom: 0; }
 
+/* ── Toggle hotkey (RADAR card row + #hotkey-modal) ──────────────────
+   Layout only: the pill is .btn-toggle--small, the clear button .icon-btn,
+   the hint .device-sub and the editor the .modal pattern. These rules let
+   the pill share a line (label row in the card, .preset-row in the modal)
+   like the preset select does, and keep a long binding on one line. */
+.hotkey-btn {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    margin-bottom: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.hotkey-readout { margin-left: auto; font-weight: 400; text-align: right; }
+.hotkey-hint { margin-top: 6px; }
+
 /* ── CUSTOMIZATION ─────────────────────────────────────────────── */
 /* Four equal columns: Color + Thickness | Overlay | Preview | Position.
    The card height is fixed by the row above it, so new look settings get a

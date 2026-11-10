@@ -8,8 +8,10 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, QThread, QTimer
 from PyQt6.QtGui import QColor, QIcon
 
+import hotkeys
 import look
 from audio_capture import AudioCaptureThread
+from global_hotkey import create_backend as create_hotkey_backend
 from overlay import OverlayRadar
 from perf_stats import LOG_NAME as PERF_LOG_NAME, PerfLog, PerfStats, enabled_from_env
 
@@ -165,6 +167,8 @@ class Bridge(QObject):
     appearanceChanged = pyqtSignal(str)        # overlay look (colour, thickness, size, opacity, outline) as JSON
     selectedPresetChanged = pyqtSignal(str)    # preset/profile name to restore in the dropdown
     audioSettingsChanged = pyqtSignal(str)     # all five live audio params, so JS moves the sliders
+    hotkeyChanged = pyqtSignal(str)            # toggle hotkey binding state as JSON
+    overlayVisibilityChanged = pyqtSignal(str)  # {"hidden", "radar_active"} as JSON
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -302,6 +306,21 @@ class Bridge(QObject):
         """Show or hide the faint white base ring."""
         self._app.set_outline_enabled(enabled)
 
+    # ── Toggle hotkey (global app setting, not part of profiles) ──────
+    @pyqtSlot(str)
+    def set_toggle_hotkey(self, combo: str):
+        """Bind the show/hide hotkey ("" clears it). Python validates and
+        normalises; the answer comes back through hotkeyChanged. Also ends a
+        capture started with set_hotkey_capture(true)."""
+        self._app.set_toggle_hotkey(combo)
+
+    @pyqtSlot(bool)
+    def set_hotkey_capture(self, capturing: bool):
+        """true: the dashboard waits for the player to press a combination, so
+        the current one is released (it would be swallowed otherwise). false:
+        restore it. Safe to call repeatedly."""
+        self._app.set_hotkey_capture(capturing)
+
     # ── Profiles ──────────────────────────────────────────────────────
     @pyqtSlot(str)
     def save_profile(self, json_str: str):
@@ -397,6 +416,16 @@ class Bridge(QObject):
         # Mono-output devices + VB-CABLE detection
         self._app.emit_mono_state()
 
+        # Toggle hotkey. A freshly loaded page is never waiting for a key press:
+        # if the old page went away mid-capture (reload, crash), its "false"
+        # never came and the hotkey would stay released, so restore it here.
+        if self._app.hotkey_status.capturing:
+            self._app.set_hotkey_capture(False)
+        self._app.emit_hotkey_state()
+
+        # Whether the hotkey has hidden the running radar
+        self._app.emit_overlay_visibility(force=True)
+
 
 # ── Main Application ────────────────────────────────────────────────────────
 
@@ -414,6 +443,18 @@ class AudioRadarApp(QMainWindow):
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
         self.radar_active = False
+        # True while the toggle hotkey has hidden the running radar. Session
+        # only, never saved: Start always shows the overlay. Only ever true
+        # while the radar runs and a hotkey is active (see _set_overlay_hidden
+        # callers), so a player cannot be left with a hidden radar and no key.
+        self.overlay_hidden = False
+        self._published_visibility = None   # last overlayVisibilityChanged payload
+
+        # Toggle hotkey preference ("" = unbound). Missing or junk in
+        # settings.json means the default; nothing is written back until the
+        # player changes it, so an old settings.json stays untouched.
+        self.toggle_hotkey = hotkeys.preference_from_setting(
+            self.settings.get("toggle_hotkey"))
 
         # Live audio parameters, held here as the source of truth so they survive
         # thread recreation. The capture thread is rebuilt fresh (with library
@@ -495,6 +536,16 @@ class AudioRadarApp(QMainWindow):
         self.bridge = Bridge(self)
         self.overlay.positionChanged.connect(self.on_overlay_position_changed)
         self.overlay.positionPreview.connect(self.on_overlay_position_preview)
+
+        # Global toggle hotkey. After the bridge: the backend answers through
+        # statusChanged, synchronously on Windows, and the handler emits to JS.
+        # A conflict at startup is reported, never fatal.
+        self.hotkey_status = hotkeys.BindingStatus(state=hotkeys.STATE_PENDING)
+        self.hotkey_backend = create_hotkey_backend(parent=self)
+        self.hotkey_backend.statusChanged.connect(self.on_hotkey_status)
+        self.hotkey_backend.activated.connect(self.on_hotkey_activated)
+        self.hotkey_backend.bind(hotkeys.TOGGLE_OVERLAY, self.toggle_hotkey,
+                                 initial=True)
 
         # WebEngine view
         self.view = QWebEngineView()
@@ -641,12 +692,15 @@ class AudioRadarApp(QMainWindow):
             old_side = look.overlay_side_px(self.overlay_size)
             new_side = look.overlay_side_px(size)
             self.overlay_size = size
-            visible = self.overlay.isVisible()
-            # Only a visible radar keeps its centre on the same screen pixel. A
+            # Only a placed radar keeps its centre on the same screen pixel. A
             # hidden window's position can be meaningless: before the first Start
             # it sits unplaced at (0, 0), and shifting that sent it to negative
             # coordinates, so the position readout showed -150, -150 and a D-pad
             # nudge put the radar partly off screen.
+            # A running radar hidden by the hotkey is placed: without this, the
+            # next hotkey show put its centre half the size change off when no
+            # position was saved.
+            visible = self.overlay.isVisible() or self.overlay_hidden
             # Geometry only: the native window is not re-created.
             self.overlay.set_overlay_size(size, keep_center=visible)
 
@@ -719,6 +773,74 @@ class AudioRadarApp(QMainWindow):
             "thickness": self.stroke_width,
             **self._look_values(),
         }))
+
+    # ── Toggle hotkey ─────────────────────────────────────────────────
+    # A global app setting (settings.json "toggle_hotkey"), deliberately not in
+    # profiles: switching profiles must never move the key a player relies on
+    # mid-match. global_hotkey.py does the binding; this only routes requests
+    # and turns its answers into the hotkeyChanged payload.
+
+    def set_toggle_hotkey(self, value):
+        # Validated, normalised and length-capped in hotkeys.HotkeyBinder; a
+        # failed change keeps the old binding and reports why.
+        self.hotkey_backend.bind(hotkeys.TOGGLE_OVERLAY, value)
+
+    def set_hotkey_capture(self, capturing):
+        if capturing:
+            self.hotkey_backend.suspend()
+        else:
+            self.hotkey_backend.resume()
+
+    def on_hotkey_status(self, action_id, status):
+        if action_id != hotkeys.TOGGLE_OVERLAY:
+            return
+        self.hotkey_status = status
+        if status.preferred != self.toggle_hotkey:
+            # The backend accepted a new preference (a failed change never
+            # moves it). Debounced like every other setting.
+            self.toggle_hotkey = status.preferred
+            self.settings["toggle_hotkey"] = status.preferred
+            self._queue_settings_save()
+        if not status.effective and self.overlay_hidden:
+            # Cleared, failed, released for capture, or system-revoked: no key
+            # could bring the radar back, so show it now.
+            self._set_overlay_hidden(False)
+            self._sync_overlay_visibility()
+        self.emit_hotkey_state()
+
+    def emit_hotkey_state(self):
+        s = self.hotkey_status
+        caps = self.hotkey_backend.capabilities()
+        self.bridge.hotkeyChanged.emit(json.dumps({
+            "combo": self.toggle_hotkey,
+            "state": s.state,
+            "effective": s.effective,
+            "requested": s.requested,
+            "error": s.error,
+            "capturing": bool(s.capturing),
+            "can_choose": bool(caps.get("can_choose_combo")),
+        }))
+
+    def on_hotkey_activated(self, action_id):
+        # Delivered through a queued signal, so a press can arrive just after
+        # the binding was released (capture start). Ignore it then: hiding
+        # needs a live key to undo it.
+        if action_id == hotkeys.TOGGLE_OVERLAY and self.hotkey_status.effective:
+            self.toggle_overlay_hidden()
+
+    def toggle_overlay_hidden(self):
+        """The hotkey: hide or show the running radar. Capture keeps running
+        either way (the mono mix is fed from it), so showing again is instant
+        and nothing restarts."""
+        if not self.radar_active:
+            return          # stopped: nothing to toggle, Start shows it
+        if self.overlay.drag_enabled:
+            # Leave Move mode exactly like the dashboard's Move button: saves
+            # the position and tells the dashboard (overlayPositionChanged).
+            # Otherwise the next show would come back draggable, not click-through.
+            self.set_overlay_drag_enabled(False)
+        self._set_overlay_hidden(not self.overlay_hidden)
+        self._sync_overlay_visibility()
 
     # ── Mono output (single-sided listeners) ──────────────────────────
     def set_mono_enabled(self, enabled: bool):
@@ -942,10 +1064,56 @@ class AudioRadarApp(QMainWindow):
         else:
             self.bridge.statusChanged.emit("Radar is active", True)
 
+    # ── Overlay visibility ────────────────────────────────────────────
+    # One rule decides whether the overlay is on screen:
+    #     visible = (radar_active and not overlay_hidden) or Move mode
+    # Start, Stop, Move mode, the D-pad and the hotkey change the inputs, then
+    # call _sync_overlay_visibility(). Showing and hiding anywhere else would
+    # let `overlay_hidden` drift from what is actually on screen.
+
+    def _set_overlay_hidden(self, hidden):
+        self.overlay_hidden = bool(hidden)
+        self.emit_overlay_visibility()
+
+    def emit_overlay_visibility(self, force=False):
+        """overlayVisibilityChanged, only when hidden or radar_active changed
+        (force: initial data)."""
+        state = (self.overlay_hidden, self.radar_active)
+        if not force and state == self._published_visibility:
+            return
+        self._published_visibility = state
+        self.bridge.overlayVisibilityChanged.emit(json.dumps({
+            "hidden": self.overlay_hidden,
+            "radar_active": self.radar_active,
+        }))
+
+    def _sync_overlay_visibility(self, move_mode=None):
+        """Show or hide the overlay to match the rule above. Returns True if it
+        was just shown (callers place it then).
+
+        move_mode: the Move mode state about to be applied, for the callers
+        that show the window first and switch Move mode on afterwards (the
+        order they always had). Defaults to the overlay's current state."""
+        if move_mode is None:
+            move_mode = self.overlay.drag_enabled
+        want = (self.radar_active and not self.overlay_hidden) or move_mode
+        if want == self.overlay.isVisible():
+            return False
+        if want:
+            # Tool window with WA_ShowWithoutActivating and
+            # WindowDoesNotAcceptFocus (overlay.py): showing it from the
+            # hotkey never takes focus from the game.
+            self.overlay.show()
+            return True
+        self.overlay.hide()     # hideEvent stops the timer and drops the arcs
+        return False
+
     def start_radar(self):
         self.radar_active = True
-        self.overlay.show()
+        self.overlay_hidden = False     # Start always shows the overlay
+        self._sync_overlay_visibility()
         self._place_overlay_for_start()
+        self.emit_overlay_visibility()
         self._start_capture_thread()
         # Refresh the program list so newly launched apps show up next time.
         self.emit_programs()
@@ -962,8 +1130,11 @@ class AudioRadarApp(QMainWindow):
 
     def stop_radar(self):
         self.radar_active = False
+        self.overlay_hidden = False
+        # Move mode off first: hide() alone keeps drag_enabled, so the next
+        # show would come back draggable instead of click-through.
         self.overlay.set_drag_enabled(False)
-        self.overlay.hide()
+        self._sync_overlay_visibility()
         self.audio_thread.stop()
 
         # Create a fresh thread ready for next start
@@ -971,6 +1142,7 @@ class AudioRadarApp(QMainWindow):
 
         self.bridge.statusChanged.emit("Radar stopped", False)
         self.emit_overlay_position()
+        self.emit_overlay_visibility()
 
     def _selected_monitor_center_position(self):
         screens = QApplication.screens()
@@ -1018,9 +1190,14 @@ class AudioRadarApp(QMainWindow):
 
     def set_overlay_drag_enabled(self, enabled: bool):
         enabled = bool(enabled)
-        if enabled and not self.overlay.isVisible():
-            self.overlay.show()
-            self._place_overlay_for_start()
+        if enabled:
+            # Move mode from the dashboard while the hotkey has the radar
+            # hidden: un-hide, the player has to see what they are moving.
+            self._set_overlay_hidden(False)
+            # Radar stopped: first show, place it like Start would. A running
+            # radar that was hidden comes back where it was.
+            if self._sync_overlay_visibility(move_mode=True) and not self.radar_active:
+                self._place_overlay_for_start()
 
         self.overlay.set_drag_enabled(enabled)
 
@@ -1030,14 +1207,16 @@ class AudioRadarApp(QMainWindow):
 
         pos = self.overlay.pos()
         self.on_overlay_position_changed(pos.x(), pos.y())
-        if not self.radar_active:
-            self.overlay.hide()
+        self._sync_overlay_visibility()     # hides it again if the radar is stopped
 
     def move_overlay(self, x: int, y: int):
-        if not self.overlay.isVisible():
-            self.overlay.show()
-            if not self.radar_active:
-                self.overlay.set_drag_enabled(True)
+        # D-pad while hidden by the hotkey: un-hide, same as Move mode.
+        self._set_overlay_hidden(False)
+        # With the radar stopped the D-pad works in Move mode, switched on
+        # right after the first show (the order it always had).
+        move_mode = self.overlay.drag_enabled or not self.radar_active
+        if self._sync_overlay_visibility(move_mode=move_mode) and not self.radar_active:
+            self.overlay.set_drag_enabled(True)
 
         self.overlay.move(int(x), int(y))
         self.on_overlay_position_changed(int(x), int(y))
@@ -1080,6 +1259,13 @@ class AudioRadarApp(QMainWindow):
     # ── Lifecycle ─────────────────────────────────────────────────────
     def closeEvent(self, event):
         self._flush_pending_saves()
+        # Give the combination back to the system, also mid-capture (the
+        # backend tracks that). Windows would drop it when the thread ends too,
+        # but not if something keeps the process alive a moment longer.
+        try:
+            self.hotkey_backend.shutdown()
+        except Exception as e:
+            print(f"Hotkey shutdown failed: {e}")
         try:
             self.stop_radar()
         except Exception:

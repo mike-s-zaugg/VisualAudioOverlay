@@ -32,6 +32,14 @@
  *   set_mono_output(str)        - which real device the mono mix plays to
  *   install_vbcable()           - launch the bundled VB-CABLE installer
  *   monoStateChanged(jsonStr)   - {devices, default, cable, enabled, selected}
+ *
+ * Toggle hotkey (guarded: the Hotkey row hides itself on an older backend):
+ *   set_toggle_hotkey(str)      - bind a combination such as "Ctrl+Shift+H"; "" clears
+ *   set_hotkey_capture(bool)    - the dashboard is waiting for a key press (Python
+ *                                 releases the current hotkey meanwhile)
+ *   hotkeyChanged(jsonStr)      - {combo, state, effective, requested, error,
+ *                                  capturing, can_choose}, every key optional
+ *   overlayVisibilityChanged(jsonStr) - {hidden, radar_active}
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -69,6 +77,14 @@ function initBridge() {
             if (bridge.appearanceChanged) bridge.appearanceChanged.connect(onAppearanceChanged);
             if (bridge.audioSettingsChanged) bridge.audioSettingsChanged.connect(onAudioSettingsChanged);
             if (bridge.selectedPresetChanged) bridge.selectedPresetChanged.connect(onSelectedPresetChanged);
+            // Toggle hotkey. An older backend has neither the signal nor the slot,
+            // so the Hotkey row would only show a sample binding: hide it instead.
+            if (bridge.hotkeyChanged && typeof bridge.set_toggle_hotkey === "function") {
+                bridge.hotkeyChanged.connect(onHotkeyChanged);
+            } else {
+                toggleClass("hotkey-field", "is-hidden", true);
+            }
+            if (bridge.overlayVisibilityChanged) bridge.overlayVisibilityChanged.connect(onOverlayVisibilityChanged);
 
             // Show the current version in the footer.
             if (bridge.get_app_version) {
@@ -105,7 +121,11 @@ function onUpdateAvailable(version, url) {
 // ── Signal handlers (Python → JS) ──────────────────────────────────────
 function onStatusChanged(message, isActive) {
     radarActive = isActive;
-    setText("status-text", message);
+    // Kept so the line can return to it after the radar was hidden by the hotkey.
+    // While hidden, the hidden notice stays on screen (see renderStatusText).
+    lastStatusMessage = message;
+    if (!isActive) overlayHidden = false;    // a stopped radar is never "hidden"
+    renderStatusText();
     syncToggleUI();
 }
 
@@ -285,6 +305,269 @@ function onOverlayPositionChanged(jsonStr) {
     moveModeActive = !!state.drag_enabled;
     setText("position-val", `${state.x}, ${state.y}`);
     syncMoveUI();
+}
+
+// ── Toggle hotkey ──────────────────────────────────────────────────────
+// The RADAR card has room for one line only (its status line wraps to two lines
+// while the radar runs), so the card shows "Hotkey [binding]" and everything
+// else - waiting for keys, the hint, errors, Clear - lives in #hotkey-modal,
+// the same modal pattern as Mono Output setup.
+//
+// Combination strings are canonical: Ctrl, Alt, Shift (in that order), then one
+// key, joined with "+". Python owns the binding and the default; this side only
+// reads key presses and displays what hotkeyChanged reports.
+
+// Last hotkeyChanged payload (merged, so a partial payload keeps the rest).
+let hotkeyState = { combo: "", state: "", effective: "", requested: "", error: "",
+    capturing: false, can_choose: true };
+let hotkeyCapturing = false;   // our keydown listener is attached
+let hotkeyCaptureHint = "";    // why the last key press was not accepted
+let hotkeyJustSet = "";        // combination we just asked for, to confirm it saved
+let overlayHidden = false;     // radar running but hidden with the hotkey
+let lastStatusMessage = null;  // last statusChanged text, restored after hiding
+
+const HOTKEY_TEXT = {
+    capture: "Press keys...",
+    notSet: "Not set",
+    notActive: "Not active",
+    checking: "Checking...",
+    unavailable: "Not available",
+};
+const HOTKEY_HINT = {
+    idle: "Shows or hides the radar while you play.",
+    saved: "Saved. Press it in game to show or hide the radar.",
+    unbound: "No hotkey set. Click the button to pick one.",
+    capture: "Press your keys now. Esc cancels, Backspace clears.",
+    needModifier: "Add Ctrl or Alt, or use an F key.",
+    badKey: "That key can't be used. Try a letter, number or F key.",
+    meta: "The Windows key can't be used.",
+    altGr: "AltGr can't be used. Try Ctrl or Alt.",
+    pending: "Setting up the hotkey...",
+    readOnly: "Your system sets this hotkey.",
+    invalid: "That hotkey can't be used. Pick another.",
+    unsupported: "Hotkeys are not available on this system.",
+};
+
+// Windows virtual key codes (event.keyCode in QtWebEngine on Windows, which
+// follows the keyboard layout) for the keys the contract allows.
+const HOTKEY_NAMED_KEYS = { 45: "Insert", 46: "Delete", 36: "Home", 35: "End",
+    33: "PageUp", 34: "PageDown", 37: "Left", 38: "Up", 39: "Right", 40: "Down" };
+// Shift, Ctrl, Alt, left/right Win and AltGr on their own: keep waiting.
+const HOTKEY_MODIFIER_CODES = [16, 17, 18, 91, 92, 225];
+
+// Key name for a keyCode, or "" when the key is not in the vocabulary.
+function hotkeyKeyName(code) {
+    code = Number(code);
+    if (!Number.isInteger(code)) return "";
+    if (code >= 65 && code <= 90) return String.fromCharCode(code);    // A-Z
+    if (code >= 48 && code <= 57) return String.fromCharCode(code);    // 0-9
+    if (code >= 112 && code <= 135) return "F" + (code - 111);         // F1-F24
+    if (code >= 96 && code <= 105) return "Num" + (code - 96);         // Num0-Num9
+    return HOTKEY_NAMED_KEYS[code] || "";
+}
+
+function isFunctionKeyName(key) {
+    return /^F([1-9]|1[0-9]|2[0-4])$/.test(key);
+}
+
+// An F key works alone; any other key needs Ctrl or Alt (Shift alone is not enough).
+function isValidHotkey(ctrl, alt, shift, key) {
+    if (!key) return false;
+    return isFunctionKeyName(key) || !!ctrl || !!alt;
+}
+
+function hotkeyCombo(ctrl, alt, shift, key) {
+    const parts = [];
+    if (ctrl) parts.push("Ctrl");
+    if (alt) parts.push("Alt");
+    if (shift) parts.push("Shift");
+    parts.push(key);
+    return parts.join("+");
+}
+
+// What a keydown means while waiting for keys:
+//   {action: "ignore"}            a modifier on its own, keep waiting
+//   {action: "cancel"}            Esc
+//   {action: "clear"}             Backspace or Delete on its own
+//   {action: "reject", hint}      not usable, keep waiting and say why
+//   {action: "bind", combo}       a valid canonical combination
+function readHotkeyEvent(e) {
+    const code = Number(e && e.keyCode);
+    if (HOTKEY_MODIFIER_CODES.includes(code)) return { action: "ignore" };
+    const ctrl = !!e.ctrlKey, alt = !!e.altKey, shift = !!e.shiftKey, meta = !!e.metaKey;
+    const altGr = typeof e.getModifierState === "function" && !!e.getModifierState("AltGraph");
+    const bare = !ctrl && !alt && !shift && !meta && !altGr;
+    if (code === 27 && bare) return { action: "cancel" };
+    if ((code === 8 || code === 46) && bare) return { action: "clear" };
+    if (meta) return { action: "reject", hint: HOTKEY_HINT.meta };
+    if (altGr) return { action: "reject", hint: HOTKEY_HINT.altGr };
+    const key = hotkeyKeyName(code);
+    if (!key) return { action: "reject", hint: HOTKEY_HINT.badKey };
+    if (!isValidHotkey(ctrl, alt, shift, key)) return { action: "reject", hint: HOTKEY_HINT.needModifier };
+    return { action: "bind", combo: hotkeyCombo(ctrl, alt, shift, key) };
+}
+
+// Merge a hotkeyChanged payload into `prev`. Never throws: junk or missing keys
+// keep the previous value, wrong types are ignored.
+function mergeHotkeyPayload(prev, raw) {
+    let p = raw;
+    if (typeof raw === "string") {
+        try { p = JSON.parse(raw); } catch (e) { p = null; }
+    }
+    const next = Object.assign({}, prev);
+    if (!p || typeof p !== "object") return next;
+    for (const k of ["combo", "state", "effective", "requested", "error"]) {
+        if (typeof p[k] === "string") next[k] = p[k];
+    }
+    for (const k of ["capturing", "can_choose"]) {
+        if (typeof p[k] === "boolean") next[k] = p[k];
+    }
+    return next;
+}
+
+// The player can pick a binding here (not unsupported, not system managed).
+function hotkeyCanChoose(s) {
+    return s.state !== "unsupported" && s.can_choose !== false;
+}
+
+// Text of the binding button (and the read-only readout).
+function hotkeyButtonText(s, capturing) {
+    if (capturing) return HOTKEY_TEXT.capture;
+    if (s.state === "unsupported") return HOTKEY_TEXT.unavailable;
+    if (s.effective) return s.effective;
+    if (s.state === "pending" && (s.requested || s.combo)) return HOTKEY_TEXT.checking;
+    if (s.combo) return HOTKEY_TEXT.notActive;     // saved but not working (startup conflict)
+    return HOTKEY_TEXT.notSet;
+}
+
+// Hint line under the binding button. `ctx` = {capturing, captureHint, justSet}.
+function hotkeyHintText(s, ctx) {
+    ctx = ctx || {};
+    if (ctx.capturing) return ctx.captureHint || HOTKEY_HINT.capture;
+    if (s.state === "unsupported") return s.error || HOTKEY_HINT.unsupported;
+    if (s.state === "conflict") {
+        return s.error || `${s.requested || s.combo || "That hotkey"} is already in use. Pick another.`;
+    }
+    if (s.state === "invalid") return s.error || HOTKEY_HINT.invalid;
+    if (s.state === "pending") return HOTKEY_HINT.pending;
+    if (s.can_choose === false) return HOTKEY_HINT.readOnly;
+    if (!s.combo && !s.effective) return HOTKEY_HINT.unbound;
+    if (ctx.justSet && (s.effective === ctx.justSet || s.combo === ctx.justSet)) return HOTKEY_HINT.saved;
+    return HOTKEY_HINT.idle;
+}
+
+// Status line while the radar is hidden with the hotkey.
+function hiddenStatusText(key) {
+    return key ? `Radar hidden. Press ${key} to show it.` : "Radar hidden. Press your hotkey to show it.";
+}
+
+function isHotkeyCapturing() { return hotkeyCapturing; }
+
+function onHotkeyChanged(jsonStr) {
+    hotkeyState = mergeHotkeyPayload(hotkeyState, jsonStr);
+    // The binding can no longer be picked here: stop waiting for keys.
+    if (hotkeyCapturing && !hotkeyCanChoose(hotkeyState)) AR.cancelHotkeyCapture();
+    renderHotkey();
+    if (overlayHidden) renderStatusText();      // the hidden notice names the key
+}
+
+function onOverlayVisibilityChanged(jsonStr) {
+    let p = null;
+    try { p = typeof jsonStr === "string" ? JSON.parse(jsonStr) : jsonStr; } catch (e) { p = null; }
+    if (!p || typeof p !== "object") return;
+    if (typeof p.hidden !== "boolean") return;
+    overlayHidden = p.hidden && p.radar_active !== false;
+    renderStatusText();
+}
+
+// #status-text shows the hidden notice while hidden, else the last statusChanged.
+function renderStatusText() {
+    if (overlayHidden) {
+        if (lastStatusMessage === null) {
+            const el = document.getElementById("status-text");
+            lastStatusMessage = el ? el.textContent : "";
+        }
+        setText("status-text", hiddenStatusText(hotkeyState.effective || hotkeyState.combo));
+    } else if (lastStatusMessage !== null) {
+        setText("status-text", lastStatusMessage);
+    }
+}
+
+function setHidden(id, hidden) { toggleClass(id, "is-hidden", hidden); }
+function setAttr(id, name, value) {
+    const el = document.getElementById(id);
+    if (el && el.setAttribute) el.setAttribute(name, value);
+}
+
+// Paint the card row and the modal from hotkeyState + the local capture state.
+function renderHotkey() {
+    const s = hotkeyState;
+    const canChoose = hotkeyCanChoose(s);
+    const text = hotkeyButtonText(s, hotkeyCapturing);
+    const hint = hotkeyHintText(s, { capturing: hotkeyCapturing, captureHint: hotkeyCaptureHint,
+        justSet: hotkeyJustSet });
+    const bound = !!(s.combo || s.effective);
+
+    // RADAR card: a button when the player can change it, plain text otherwise.
+    setHidden("hotkey-btn", !canChoose);
+    setHidden("hotkey-readout", canChoose);
+    setText("hotkey-btn", text);
+    setText("hotkey-readout", text);
+    setAttr("hotkey-btn", "title", hint + " Click to change.");
+    setAttr("hotkey-btn", "aria-label", `Hotkey: ${text}. Click to change.`);
+    setAttr("hotkey-readout", "title", hint);
+    setAttr("hotkey-readout", "aria-label", `Hotkey: ${text}. ${hint}`);
+
+    // Modal.
+    setHidden("hotkey-capture-btn", !canChoose);
+    setText("hotkey-capture-btn", text);
+    setAttr("hotkey-capture-btn", "aria-label", hotkeyCapturing
+        ? "Waiting for keys. Click to stop." : `Hotkey: ${text}. Click to change.`);
+    setAttr("hotkey-capture-btn", "aria-pressed", hotkeyCapturing ? "true" : "false");
+    toggleClass("hotkey-capture-btn", "is-active", hotkeyCapturing);
+    setHidden("hotkey-clear", !canChoose || !bound);
+    setText("hotkey-hint", hint);
+}
+
+function onHotkeyCaptureKey(e) {
+    // Every key is ours while waiting, so Ctrl+R, F5 and friends do nothing.
+    e.preventDefault();
+    e.stopPropagation();
+    const r = readHotkeyEvent(e);
+    if (r.action === "ignore") return;
+    if (r.action === "cancel") { AR.cancelHotkeyCapture(); return; }
+    if (r.action === "clear") { AR.clearHotkey(); return; }
+    if (r.action === "reject") { hotkeyCaptureHint = r.hint; renderHotkey(); return; }
+    // Valid: Python ends capture itself when it gets the new binding.
+    endHotkeyCapture();
+    hotkeyJustSet = r.combo;
+    callBridge("set_toggle_hotkey", r.combo);
+    renderHotkey();
+}
+
+// The window lost focus or got hidden: the keys go elsewhere now, so stop.
+function onHotkeyCaptureBlur() { AR.cancelHotkeyCapture(); }
+function onHotkeyCaptureVisibility() { if (document.hidden) AR.cancelHotkeyCapture(); }
+
+// Detach the capture listeners. Does not tell Python (callers decide).
+function endHotkeyCapture() {
+    if (!hotkeyCapturing) return;
+    hotkeyCapturing = false;
+    hotkeyCaptureHint = "";
+    window.removeEventListener("keydown", onHotkeyCaptureKey, true);
+    window.removeEventListener("blur", onHotkeyCaptureBlur);
+    document.removeEventListener("visibilitychange", onHotkeyCaptureVisibility);
+}
+
+// Esc closes the modal when it is not waiting for keys (capture stops Esc earlier).
+function onHotkeyModalKey(e) {
+    if (hotkeyCapturing) return;
+    if (e.keyCode === 27) { e.preventDefault(); AR.closeHotkey(); }
+}
+
+function focusEl(id) {
+    const el = document.getElementById(id);
+    if (el && typeof el.focus === "function") el.focus();
 }
 
 // ── Preset / profile dropdowns ─────────────────────────────────────────
@@ -506,6 +789,57 @@ window.AR = {
     setOutlineEnabled(on) {
         callBridge("set_outline_enabled", !!on);
         drawPreview();
+    },
+
+    // ── Toggle hotkey ──────────────────────────────────────────────
+    // The binding button (card or modal): open the modal and wait for keys.
+    // A second click while waiting stops waiting.
+    startHotkeyCapture() {
+        if (!hotkeyCanChoose(hotkeyState)) return;
+        if (hotkeyCapturing) { AR.cancelHotkeyCapture(); return; }
+        AR.openHotkey();
+        hotkeyCapturing = true;
+        hotkeyCaptureHint = "";
+        hotkeyJustSet = "";
+        window.addEventListener("keydown", onHotkeyCaptureKey, true);
+        window.addEventListener("blur", onHotkeyCaptureBlur);
+        document.addEventListener("visibilitychange", onHotkeyCaptureVisibility);
+        callBridge("set_hotkey_capture", true);
+        renderHotkey();
+        focusEl("hotkey-capture-btn");
+    },
+
+    // Stop waiting for keys without changing the binding.
+    cancelHotkeyCapture() {
+        if (!hotkeyCapturing) return;
+        endHotkeyCapture();
+        callBridge("set_hotkey_capture", false);
+        renderHotkey();
+    },
+
+    // Remove the binding. Also ends capture (Python ends it on its side).
+    clearHotkey() {
+        endHotkeyCapture();
+        hotkeyJustSet = "";
+        callBridge("set_toggle_hotkey", "");
+        renderHotkey();
+    },
+
+    openHotkey() {
+        const modal = document.getElementById("hotkey-modal");
+        if (modal && modal.classList.contains && !modal.classList.contains("is-hidden")) return;
+        toggleClass("hotkey-modal", "is-hidden", false);
+        document.addEventListener("keydown", onHotkeyModalKey);
+        renderHotkey();
+    },
+
+    closeHotkey() {
+        AR.cancelHotkeyCapture();
+        hotkeyJustSet = "";
+        toggleClass("hotkey-modal", "is-hidden", true);
+        document.removeEventListener("keydown", onHotkeyModalKey);
+        renderHotkey();
+        focusEl("hotkey-btn");
     },
 
     // ── Footer support links + update banner ──────────────────────────

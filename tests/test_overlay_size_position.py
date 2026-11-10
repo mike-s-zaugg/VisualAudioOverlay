@@ -91,6 +91,7 @@ class FakeApp:
         self.overlay = overlay
         self.settings = settings or {}
         self.overlay_size = 100
+        self.overlay_hidden = False     # hidden by the toggle hotkey
         self.bridge = _Bridge()
         self.saves_queued = 0
 

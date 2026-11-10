@@ -172,6 +172,20 @@
                     </div>
                 </div>
 
+                <!-- Toggle hotkey. One line only: the status line above wraps to
+                     two lines while the radar runs, so waiting for keys, hints,
+                     errors and Clear live in #hotkey-modal (like Mono Output). -->
+                <div id="hotkey-field" class="field">
+                    <div class="field-label">
+                        <span>Hotkey</span>
+                        <button id="hotkey-btn" class="btn-toggle btn-toggle--small hotkey-btn"
+                            title="Shows or hides the radar while you play. Click to change."
+                            aria-label="Hotkey: Ctrl+Shift+H. Click to change."
+                            onclick="AR.startHotkeyCapture()">Ctrl+Shift+H</button>
+                        <span id="hotkey-readout" class="device-sub hotkey-readout is-hidden"></span>
+                    </div>
+                </div>
+
             </section>
         </div>
 
@@ -368,6 +382,40 @@
 
             <button class="btn-toggle btn-toggle--small mono-done"
                 onclick="AR.closeMonoSetup()">Done</button>
+        </div>
+    </div>
+
+    <!-- ── Hotkey modal ──────────────────────────────────────────────────
+         Opened by the Hotkey button in the RADAR card, which has no room for
+         a hint or error line. Same pieces as the Mono Output setup modal. -->
+    <div id="hotkey-modal" class="modal is-hidden" role="dialog" aria-modal="true"
+        aria-labelledby="hotkey-modal-title" aria-describedby="hotkey-modal-intro">
+        <div class="modal-backdrop" onclick="AR.closeHotkey()"></div>
+        <div class="modal-card">
+            <h2 id="hotkey-modal-title" class="modal-title">Radar Hotkey</h2>
+            <p id="hotkey-modal-intro" class="modal-intro">
+                Click the button, then press the keys you want. Use Ctrl or Alt
+                with a key, or an F key on its own.
+            </p>
+
+            <div class="field">
+                <div class="field-label"><span>Hotkey</span></div>
+                <div class="preset-row">
+                    <button id="hotkey-capture-btn" class="btn-toggle btn-toggle--small hotkey-btn"
+                        aria-label="Hotkey: Ctrl+Shift+H. Click to change." aria-pressed="false"
+                        onclick="AR.startHotkeyCapture()">Ctrl+Shift+H</button>
+                    <button id="hotkey-clear" class="icon-btn" title="Clear hotkey"
+                        aria-label="Clear hotkey" onclick="AR.clearHotkey()">
+                        <img src="icons/Trash_Full.svg" class="icon" alt="">
+                    </button>
+                </div>
+                <div id="hotkey-hint" class="device-sub hotkey-hint" role="status" aria-live="polite">
+                    Shows or hides the radar while you play.
+                </div>
+            </div>
+
+            <button class="btn-toggle btn-toggle--small mono-done"
+                onclick="AR.closeHotkey()">Done</button>
         </div>
     </div>
 

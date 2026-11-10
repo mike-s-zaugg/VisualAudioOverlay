@@ -29,16 +29,25 @@ class OverlayRadar(QWidget):
         self._perf = perf
 
         self.setWindowTitle("Visual Audio Overlay")
+        # The toggle hotkey shows this window while a game has focus, and the
+        # WM_HOTKEY that triggers it gives this process the right to take the
+        # foreground. So the overlay must never be activated: Tool windows are
+        # already shown without activation on Windows, WA_ShowWithoutActivating
+        # makes that explicit, and WindowDoesNotAcceptFocus (WS_EX_NOACTIVATE)
+        # also stops raise_() or a click in Move mode from activating it.
+        # Mouse input still arrives without activation, so dragging works.
         self.base_window_flags = (
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.drag_enabled = False
         self.drag_start_global = None
         self.drag_start_window = None
         self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         # Default accent must match the dashboard's default swatch (#9751F2) so the
         # first Start looks the same as the UI shows, even before the user touches
