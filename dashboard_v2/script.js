@@ -15,6 +15,13 @@
  *   set_program(str)            - per-app capture target
  *   programsChanged(jsonStr)    - list of running audio programs
  *
+ *   Overlay look (guarded, see callBridge):
+ *   set_overlay_size(int)       - radar size in percent, 50-200 (100 = 300 px)
+ *   set_alert_opacity(int)      - max arc opacity in percent, 20-100
+ *   set_outline_enabled(bool)   - show the faint base ring
+ *   appearanceChanged(jsonStr)  - {color, thickness, overlay_size, alert_opacity,
+ *                                  outline_enabled}, every key optional
+ *
  *   set_selected_preset(str)      - persist the dropdown choice to settings.json
  *   selectedPresetChanged(str)    - that choice, restored on load (name only)
  *   audioSettingsChanged(jsonStr) - the live sensitivity/gain/freq/max-amp, so the
@@ -148,9 +155,11 @@ function onProgramsChanged(jsonStr) {
         ...progs.map(p => ({ value: p, label: p }))]);
 }
 
-// Saved overlay appearance (accent colour + thickness) restored from settings.json.
-// Setting an input's value programmatically does NOT fire its oninput, so this never
-// loops back into a re-save.
+// Saved overlay appearance (accent colour, thickness, size, alert opacity, outline)
+// restored from settings.json, or corrected by Python after it clamped a value.
+// Setting an input's value programmatically does NOT fire its oninput/onchange, so
+// this never loops back into a re-save. Every key is optional: a missing key (older
+// backend, partial payload) leaves that control as it is.
 function onAppearanceChanged(jsonStr) {
     const a = JSON.parse(jsonStr);
     if (a.color) {
@@ -164,7 +173,38 @@ function onAppearanceChanged(jsonStr) {
         setText("thickness-val", a.thickness + " px");
         setFill("thickness", a.thickness, 1, 20);
     }
+    if (a.overlay_size != null) {
+        setSliderValue("overlay-size", a.overlay_size);
+        setText("overlay-size-val", overlaySizeText(a.overlay_size));
+        setFill("overlay-size", a.overlay_size, 50, 200);
+    }
+    if (a.alert_opacity != null) {
+        setSliderValue("alert-opacity", a.alert_opacity);
+        setText("alert-opacity-val", a.alert_opacity + " %");
+        setFill("alert-opacity", a.alert_opacity, 20, 100);
+    }
+    if (a.outline_enabled != null) {
+        const cb = document.getElementById("outline-enabled");
+        if (cb) cb.checked = !!a.outline_enabled;
+    }
     drawPreview();
+}
+
+// The overlay window is 300 px square at 100 % (overlay.py); Size scales it.
+const OVERLAY_BASE_PX = 300;
+
+// Size readout, e.g. "100 % · 300 px".
+function overlaySizeText(pct) {
+    const p = parseInt(pct);
+    return `${p} % · ${Math.round(OVERLAY_BASE_PX * p / 100)} px`;
+}
+
+// Call a bridge slot only when the backend is connected and has it, so the look
+// controls still update their readout and preview in local preview mode (no Qt)
+// and against an older backend that lacks the slot.
+function callBridge(slot, ...args) {
+    const b = window.bridge;
+    if (b && typeof b[slot] === "function") b[slot](...args);
 }
 
 // Move the audio sliders and their readouts to match the backend. Sent on load
@@ -362,6 +402,9 @@ window.AR = {
             mono_device: strVal("mono-output-select", ""),
             accent_color: strVal("accent-color", "#9751F2"),
             thickness: intVal("thickness", 6),
+            overlay_size: intVal("overlay-size", 100),
+            alert_opacity: intVal("alert-opacity", 100),
+            outline_enabled: document.getElementById("outline-enabled")?.checked ?? true,
         };
         // Select the new profile as soon as it comes back in profilesChanged, by
         // re-arming the restore latch: it selects a name the moment its option
@@ -439,6 +482,32 @@ window.AR = {
         drawPreview();
     },
 
+    // Whole-radar size in percent. The preview deliberately keeps its size:
+    // ring and arcs scale together, so it already shows the look, and the
+    // readout carries the size.
+    setOverlaySize(val) {
+        const pct = parseInt(val);
+        setText("overlay-size-val", overlaySizeText(pct));
+        setFill("overlay-size", pct, 50, 200);
+        callBridge("set_overlay_size", pct);
+        drawPreview();
+    },
+
+    // Maximum arc opacity in percent (a full-strength sound). The ring is unaffected.
+    setAlertOpacity(val) {
+        const pct = parseInt(val);
+        setText("alert-opacity-val", pct + " %");
+        setFill("alert-opacity", pct, 20, 100);
+        callBridge("set_alert_opacity", pct);
+        drawPreview();
+    },
+
+    // Faint base ring on/off. Arcs are unaffected.
+    setOutlineEnabled(on) {
+        callBridge("set_outline_enabled", !!on);
+        drawPreview();
+    },
+
     // ── Footer support links + update banner ──────────────────────────
     openRepo() { openExternal(REPO_URL); },
     openFeedback() { openExternal(FEEDBACK_URL); },
@@ -507,12 +576,47 @@ function applyProfileValues(p) {
         setSliderValue("thickness", p.thickness);
         AR.setThickness(p.thickness);
     }
+    // Size and opacity are applied only when they are numbers (a hand-edited
+    // profile can hold "abc" or true, which a range input would turn into its
+    // midpoint). They are read back from the slider, which snaps an out-of-range
+    // or off-step number to what the control can show.
+    const size = profileNumber(p.overlay_size);
+    if (size !== null) {
+        setSliderValue("overlay-size", size);
+        AR.setOverlaySize(intVal("overlay-size", 100));
+    }
+    const opacity = profileNumber(p.alert_opacity);
+    if (opacity !== null) {
+        setSliderValue("alert-opacity", opacity);
+        AR.setAlertOpacity(intVal("alert-opacity", 100));
+    }
+    // Only a real boolean: anything else leaves the outline as it is.
+    if (typeof p.outline_enabled === "boolean") {
+        const cb = document.getElementById("outline-enabled");
+        if (cb) cb.checked = p.outline_enabled;
+        AR.setOutlineEnabled(p.outline_enabled);
+    }
+}
+
+// A profile value as a finite number, or null to skip it. Accepts real numbers
+// and numeric strings ("120"); booleans, NaN, empty strings and other junk are null.
+function profileNumber(v) {
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    if (typeof v === "string" && v.trim() !== "") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
 }
 
 // ── Preview canvas - mirrors overlay.py rendering ──────────────────────
 // overlay.py: faint white base circle + accent-coloured arc "blips",
 // 35° span, round cap, stroke width = thickness. Here we draw one static
 // sample blip so the user sees the chosen colour + thickness style.
+// The blip is a full-strength sound, so it is drawn at the alert opacity
+// (overlay: alpha = strength * alert opacity). The base circle is only drawn
+// while the outline is on. Overlay size is NOT drawn: ring and arcs scale
+// together, so the preview stays a normalised picture at its designed size.
 function drawPreview() {
     const canvas = document.getElementById("preview-canvas");
     if (!canvas) return;
@@ -524,15 +628,19 @@ function drawPreview() {
     ctx.clearRect(0, 0, W, H);
 
     // Base circle (matches overlay: white @ ~12% alpha, 2px)
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const outline = document.getElementById("outline-enabled")?.checked ?? true;
+    if (outline) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
 
     // Sample blip arc
     const accent = document.getElementById("accent-color")?.value || "#9751F2";
     const thickness = parseInt(document.getElementById("thickness")?.value || 6);
+    const opacity = (parseInt(document.getElementById("alert-opacity")?.value) || 100) / 100;
     const sampleAngleDeg = -35;             // up-and-to-the-right, like the mockup
     const spanDeg = 35;
     // canvas 0° = +x axis, clockwise; overlay angle 0 = up. Convert:
@@ -545,7 +653,9 @@ function drawPreview() {
     ctx.strokeStyle = accent;
     ctx.lineWidth = thickness;
     ctx.lineCap = "round";
+    ctx.globalAlpha = opacity;
     ctx.stroke();
+    ctx.globalAlpha = 1;
 }
 
 // ── Dual-range fill geometry ───────────────────────────────────────────
@@ -716,10 +826,13 @@ document.addEventListener("DOMContentLoaded", function () {
 function AR_initLocal() {
     setFill("sensitivity", 50); setFill("gain", 10);
     setFill("max-amp", 100); setFill("thickness", 6, 1, 20);
+    setFill("overlay-size", 100, 50, 200); setFill("alert-opacity", 100, 20, 100);
     setText("sensitivity-val", (50 / 10000).toFixed(4));
     setText("gain-val", "1.0x");
     setText("max-amp-val", "1.00");
     setText("thickness-val", "6 px");
+    setText("overlay-size-val", overlaySizeText(100));
+    setText("alert-opacity-val", "100 %");
     setText("position-val", "0, 0");
     syncMoveUI();
     updateDualFill();

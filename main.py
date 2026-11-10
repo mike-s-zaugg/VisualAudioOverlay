@@ -8,6 +8,7 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, QThread, QTimer
 from PyQt6.QtGui import QColor, QIcon
 
+import look
 from audio_capture import AudioCaptureThread
 from overlay import OverlayRadar
 from perf_stats import LOG_NAME as PERF_LOG_NAME, PerfLog, PerfStats, enabled_from_env
@@ -161,7 +162,7 @@ class Bridge(QObject):
     overlayPositionChanged = pyqtSignal(str)   # overlay position/state as JSON
     monoStateChanged = pyqtSignal(str)         # mono-output devices + cable state as JSON
     updateAvailable = pyqtSignal(str, str)     # (latest_version, release_page_url)
-    appearanceChanged = pyqtSignal(str)        # saved overlay accent colour + thickness as JSON
+    appearanceChanged = pyqtSignal(str)        # overlay look (colour, thickness, size, opacity, outline) as JSON
     selectedPresetChanged = pyqtSignal(str)    # preset/profile name to restore in the dropdown
     audioSettingsChanged = pyqtSignal(str)     # all five live audio params, so JS moves the sliders
 
@@ -286,18 +287,43 @@ class Bridge(QObject):
     def set_stroke_width(self, width: int):
         self._app.set_stroke_width(width)
 
+    @pyqtSlot(int)
+    def set_overlay_size(self, percent: int):
+        """Radar size in percent (50..200, step 10). Clamped and snapped here."""
+        self._app.set_overlay_size(percent)
+
+    @pyqtSlot(int)
+    def set_alert_opacity(self, percent: int):
+        """Maximum arc opacity in percent (20..100)."""
+        self._app.set_alert_opacity(percent)
+
+    @pyqtSlot(bool)
+    def set_outline_enabled(self, enabled: bool):
+        """Show or hide the faint white base ring."""
+        self._app.set_outline_enabled(enabled)
+
     # ── Profiles ──────────────────────────────────────────────────────
     @pyqtSlot(str)
     def save_profile(self, json_str: str):
         """Expects JSON with at least { name } plus whatever the UI captures:
         sensitivity, gain, preset, freq_low, freq_high, max_amp, invert, and
         (since richer profiles) program, monitor, mono_enabled, mono_device,
-        accent_color, thickness. Older profiles missing keys still load."""
+        accent_color, thickness, overlay_size, alert_opacity, outline_enabled.
+        Older profiles missing keys still load."""
         try:
             data = json.loads(json_str)
             name = data.get("name", "").strip()
             if not name:
                 return
+            # Look values from JS are coerced like the live setters do, so a
+            # profile never stores a value the overlay would refuse. Missing ones
+            # (an older dashboard) are filled from the live look: the profile is
+            # meant to capture the whole setup.
+            live_look = self._app._look_values()
+            for key, coerce in (("overlay_size", look.coerce_overlay_size),
+                                ("alert_opacity", look.coerce_alert_opacity),
+                                ("outline_enabled", look.coerce_outline_enabled)):
+                data[key] = coerce(data[key]) if key in data else live_look[key]
             self._app.profiles[name] = data
             self._app._save_profiles()
             # The profile you just made is the one you are working in - selecting
@@ -361,7 +387,8 @@ class Bridge(QObject):
         # Running audio programs (for per-app capture)
         self._app.emit_programs()
 
-        # Overlay appearance (accent colour + thickness), restored from settings
+        # Overlay appearance (colour, thickness, size, alert opacity, outline),
+        # restored from settings
         self._app.emit_appearance()
 
         # Overlay position
@@ -441,13 +468,25 @@ class AudioRadarApp(QMainWindow):
         # Overlay (PyQt6 transparent window - unchanged)
         self.overlay = OverlayRadar(perf=self.perf)
 
-        # Overlay appearance (accent colour + stroke). Persisted in settings.json so
-        # the look survives restarts; applied to the overlay now and pushed to the
-        # dashboard via emit_appearance() on load. Default matches the UI swatch.
+        # Overlay appearance (accent colour, stroke, size, alert opacity, outline).
+        # Persisted in settings.json so the look survives restarts; applied to the
+        # overlay now and pushed to the dashboard via emit_appearance() on load.
+        # Default colour matches the UI swatch. The look.coerce_* helpers turn a
+        # missing or hand-edited bad value into the default or the nearest valid
+        # one; a bare int() here used to crash the app on start. Nothing is
+        # written back, so starting with an old settings.json leaves it as is.
         self.accent_color = self.settings.get("accent_color") or "#9751F2"
-        self.stroke_width = int(self.settings.get("stroke_width", 6))
+        self.stroke_width = look.coerce_stroke_width(self.settings.get("stroke_width"))
+        self.overlay_size = look.coerce_overlay_size(self.settings.get("overlay_size"))
+        self.alert_opacity = look.coerce_alert_opacity(self.settings.get("alert_opacity"))
+        self.outline_enabled = look.coerce_outline_enabled(self.settings.get("outline_enabled"))
         self.overlay.set_accent_color(self.accent_color)
         self.overlay.set_stroke_width(self.stroke_width)
+        # keep_center=False: the window has never been placed yet. Start and Move
+        # mode position it (saved spot or monitor centre) using its new size.
+        self.overlay.set_overlay_size(self.overlay_size, keep_center=False)
+        self.overlay.set_alert_opacity(self.alert_opacity)
+        self.overlay.set_outline_enabled(self.outline_enabled)
 
         # Audio thread (starts idle, no capture yet)
         self._new_audio_thread()
@@ -575,7 +614,7 @@ class AudioRadarApp(QMainWindow):
         names = [p["name"] for p in self.list_programs()]
         self.bridge.programsChanged.emit(json.dumps(names))
 
-    # ── Overlay appearance (accent colour + stroke) ───────────────────
+    # ── Overlay appearance (colour, stroke, size, opacity, outline) ───
     def set_accent_color(self, hex_color: str):
         self.accent_color = hex_color or "#9751F2"
         self.overlay.set_accent_color(self.accent_color)
@@ -583,17 +622,102 @@ class AudioRadarApp(QMainWindow):
         self._queue_settings_save()
 
     def set_stroke_width(self, width: int):
-        self.stroke_width = int(width)
+        self.stroke_width = look.coerce_stroke_width(width)
         self.overlay.set_stroke_width(self.stroke_width)
         self.settings["stroke_width"] = self.stroke_width
         self._queue_settings_save()
+        if width != self.stroke_width:
+            self.emit_appearance()      # clamped: show the real value
+
+    # The three look setters below share one pattern. Python owns the ranges, so
+    # each value from JS is coerced first. An unchanged value does nothing (no
+    # repaint, no save), because slider drags repeat the same value a lot. If
+    # coercion changed what JS sent, appearanceChanged echoes the real value so
+    # the slider does not show a number the overlay is not using.
+
+    def set_overlay_size(self, value):
+        size = look.coerce_overlay_size(value)
+        if size != self.overlay_size:
+            old_side = look.overlay_side_px(self.overlay_size)
+            new_side = look.overlay_side_px(size)
+            self.overlay_size = size
+            visible = self.overlay.isVisible()
+            # Only a visible radar keeps its centre on the same screen pixel. A
+            # hidden window's position can be meaningless: before the first Start
+            # it sits unplaced at (0, 0), and shifting that sent it to negative
+            # coordinates, so the position readout showed -150, -150 and a D-pad
+            # nudge put the radar partly off screen.
+            # Geometry only: the native window is not re-created.
+            self.overlay.set_overlay_size(size, keep_center=visible)
+
+            # The saved top-left moves by the same amount, so the next Start puts
+            # the centre in the same place. With nothing saved the overlay is
+            # centred on the monitor at Start, which already uses the new size.
+            saved = self._saved_overlay_xy()
+            if saved is not None:
+                saved = look.centred_top_left(saved[0], saved[1], old_side, new_side)
+                if not visible:
+                    # Park the hidden window on the saved spot, so the readout and
+                    # a D-pad nudge before the next Start begin from where the
+                    # radar will really appear. move() does not show a widget.
+                    self.overlay.move(*saved)
+
+            # Shrinking around a centre that sits off screen can leave no pixel of
+            # the radar on any monitor. Same rule as at Start: if nothing is
+            # reachable, centre it on the selected monitor. (Growing never
+            # triggers this: the bigger window still contains the old one.)
+            if visible and not self._overlay_rect_is_visible(
+                    self.overlay.x(), self.overlay.y()):
+                x, y = self._selected_monitor_center_position()
+                self.overlay.move(x, y)
+                if saved is not None:
+                    saved = (x, y)
+
+            if saved is not None:
+                self.settings["overlay_position"] = {"x": saved[0], "y": saved[1]}
+            self.settings["overlay_size"] = size
+            self._queue_settings_save()
+            self.emit_overlay_position()
+        if value != size:
+            self.emit_appearance()
+
+    def set_alert_opacity(self, value):
+        opacity = look.coerce_alert_opacity(value)
+        if opacity != self.alert_opacity:
+            self.alert_opacity = opacity
+            self.overlay.set_alert_opacity(opacity)
+            self.settings["alert_opacity"] = opacity
+            self._queue_settings_save()
+        if value != opacity:
+            self.emit_appearance()
+
+    def set_outline_enabled(self, value):
+        enabled = look.coerce_outline_enabled(value)
+        if enabled != self.outline_enabled:
+            self.outline_enabled = enabled
+            self.overlay.set_outline_enabled(enabled)
+            self.settings["outline_enabled"] = enabled
+            self._queue_settings_save()
+        if value is not enabled:
+            self.emit_appearance()
+
+    def _look_values(self):
+        """The three newer look settings under their settings/profile/payload
+        keys. One list so emit_appearance, save_profile and the profile
+        auto-update cannot drift apart."""
+        return {
+            "overlay_size": self.overlay_size,
+            "alert_opacity": self.alert_opacity,
+            "outline_enabled": self.outline_enabled,
+        }
 
     def emit_appearance(self):
-        """Push the saved accent colour + thickness to the dashboard on load so the
-        picker/slider/preview match the overlay (and what was saved last session)."""
+        """Push the overlay look to the dashboard on load (and after Python had to
+        correct a value) so the pickers, sliders and preview match the overlay."""
         self.bridge.appearanceChanged.emit(json.dumps({
             "color": self.accent_color,
             "thickness": self.stroke_width,
+            **self._look_values(),
         }))
 
     # ── Mono output (single-sided listeners) ──────────────────────────
@@ -742,6 +866,7 @@ class AudioRadarApp(QMainWindow):
             "mono_device": self.mono_device or "",
             "accent_color": self.accent_color,
             "thickness": self.stroke_width,
+            **self._look_values(),
         })
         if all(prof.get(k) == v for k, v in updated.items()):
             return                      # nothing moved: no disk write, no rebuild
@@ -856,12 +981,21 @@ class AudioRadarApp(QMainWindow):
             geo.y() + (geo.height() - self.overlay.height()) // 2,
         )
 
-    def _saved_overlay_position_is_visible(self, pos):
+    def _saved_overlay_xy(self):
+        """The saved overlay top-left as (x, y), or None if there is none or it
+        is not usable. settings.json is hand-editable; a bad value here used to
+        raise from int() on Start."""
+        pos = self.settings.get("overlay_position")
         if not isinstance(pos, dict) or "x" not in pos or "y" not in pos:
-            return False
+            return None
+        try:
+            return int(pos["x"]), int(pos["y"])
+        except (TypeError, ValueError, OverflowError):
+            return None
 
-        x = int(pos["x"])
-        y = int(pos["y"])
+    def _overlay_rect_is_visible(self, x, y):
+        """True if the overlay, at top-left (x, y) and its current size, overlaps
+        any screen by at least one pixel."""
         width = self.overlay.width()
         height = self.overlay.height()
 
@@ -874,9 +1008,9 @@ class AudioRadarApp(QMainWindow):
         return False
 
     def _place_overlay_for_start(self):
-        pos = self.settings.get("overlay_position")
-        if self._saved_overlay_position_is_visible(pos):
-            self.overlay.move(int(pos["x"]), int(pos["y"]))
+        saved = self._saved_overlay_xy()
+        if saved is not None and self._overlay_rect_is_visible(*saved):
+            self.overlay.move(*saved)
         else:
             x, y = self._selected_monitor_center_position()
             self.overlay.move(x, y)

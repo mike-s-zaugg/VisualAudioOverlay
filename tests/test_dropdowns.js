@@ -2,8 +2,8 @@
 //
 // Run:  node tests/test_dropdowns.js       (exit 0 = pass)
 //
-// NOT wired into .github/workflows/ci.yml, which only runs pytest - adding a
-// node step is a separate call. Loads the real script.js against a minimal DOM
+// Run by the unit-test job in .github/workflows/ci.yml after pytest (Node 22,
+// no npm packages). Loads the real script.js against a minimal DOM
 // stub; the bootstrap never fires because the stub swallows DOMContentLoaded.
 //
 // Covers the two things that broke in this area: QtWebEngine growing a <select>

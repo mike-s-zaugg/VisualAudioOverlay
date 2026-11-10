@@ -474,9 +474,12 @@ body::before {
 .dpad-move { margin-bottom: 0; }
 
 /* ── CUSTOMIZATION ─────────────────────────────────────────────── */
+/* Four equal columns: Color + Thickness | Overlay | Preview | Position.
+   The card height is fixed by the row above it, so new look settings get a
+   column of their own rather than making the card taller. */
 .custom-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     gap: 40px;
     align-items: start;
 }

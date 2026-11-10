@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
 
+import look
 from direction import angle_diff
 
 # Radar behaviour. These numbers define how the radar looks to the player, so
@@ -43,14 +44,20 @@ class OverlayRadar(QWidget):
         # first Start looks the same as the UI shows, even before the user touches
         # the colour picker.
         self.accent_color = QColor("#9751F2")
-        self.stroke_width = 6
+        self.stroke_width = look.STROKE_WIDTH_DEFAULT
+        # Look settings (see look.py for ranges). Size is a zoom: the window side,
+        # the radius and every pen width scale with it.
+        self.overlay_size = look.OVERLAY_SIZE_DEFAULT
+        self.alert_opacity = look.ALERT_OPACITY_DEFAULT
+        self.outline_enabled = look.OUTLINE_ENABLED_DEFAULT
         # Each blip is {'angle': deg, 'life': 0..1, 'fresh': bool}. 'fresh' marks
         # a life value set by an audio event while the timer was running; it has
         # not been painted yet, so the next tick shows it at full value before
         # decaying it (see decay_signal and update_audio_data).
         self.blips = []
 
-        self.resize(300, 300)
+        side = look.overlay_side_px(self.overlay_size)
+        self.resize(side, side)
         self._rebuild_paint_cache()
 
         # The overlay is a per-pixel-alpha (layered) window kept on top of the
@@ -70,9 +77,9 @@ class OverlayRadar(QWidget):
 
         This is the ONE place that derives paint objects from the widget size
         and the appearance settings. Anything that changes those (resize, accent
-        colour, stroke width, and future settings such as a size scale, a
-        maximum alert opacity or turning the base ring off) must call this, then
-        update(). paintEvent itself only adjusts the arc alpha per blip.
+        colour, stroke width, overlay size) must call this, then update().
+        paintEvent itself only adjusts the arc alpha per blip. Alert opacity and
+        the outline switch are read straight from their attributes in paint.
         """
         w, h = self.width(), self.height()
         self._full_rect = self.rect()
@@ -81,8 +88,12 @@ class OverlayRadar(QWidget):
         r = self._radius
         self._arc_rect = QRectF(self._center.x() - r, self._center.y() - r, r * 2, r * 2)
 
+        size = self.overlay_size
+        # Float widths: integer pens would round a 1 px stroke at 50 % to 0,
+        # which Qt draws as a 1 px cosmetic pen that no longer scales. At 100 %
+        # setWidthF(2.0) draws exactly like the old setWidth(2).
         self._base_pen = QPen(QColor(255, 255, 255, 30))
-        self._base_pen.setWidth(2)
+        self._base_pen.setWidthF(look.scaled_width(look.BASE_RING_WIDTH_PX, size))
 
         # Accent without its own alpha; paintEvent sets the alpha per blip.
         self._arc_color = QColor(
@@ -91,14 +102,15 @@ class OverlayRadar(QWidget):
             self.accent_color.blue(),
         )
         self._arc_pen = QPen(self._arc_color)
-        self._arc_pen.setWidth(self.stroke_width)
+        self._arc_pen.setWidthF(look.scaled_width(self.stroke_width, size))
         self._arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
 
         # Move mode decorations.
         self._drag_fill = QColor(255, 255, 255, 8)
         self._setup_pen = QPen(QColor(255, 255, 255, 120))
-        self._setup_pen.setWidth(1)
+        self._setup_pen.setWidth(1)       # stays 1 px at every size on purpose
         self._setup_pen.setStyle(Qt.PenStyle.DashLine)
+        self._setup_radius = self._radius + look.scaled_width(look.DRAG_RING_OFFSET_PX, size)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -182,8 +194,55 @@ class OverlayRadar(QWidget):
         self.update()
 
     def set_stroke_width(self, width):
-        self.stroke_width = width
+        self.stroke_width = look.coerce_stroke_width(width)
         self._rebuild_paint_cache()
+        self.update()
+
+    def set_overlay_size(self, percent, keep_center=True):
+        """Resize the window to the given size percent (zoom).
+
+        keep_center=True moves the top-left by half the size difference so the
+        radar centre stays on the same screen pixel, visible or hidden. main.py
+        passes False once at startup, where the window has no position yet.
+        Only geometry changes here: no window flags, so the native window is not
+        re-created and this is safe to call on every slider step.
+        """
+        percent = look.coerce_overlay_size(percent)
+        if percent == self.overlay_size:
+            return
+        old_side = self.width()
+        new_side = look.overlay_side_px(percent)
+        self.overlay_size = percent
+        if keep_center:
+            pos = self.pos()
+            x, y = look.centred_top_left(pos.x(), pos.y(), old_side, new_side)
+            # One setGeometry instead of resize() + move(): a single native
+            # resize-and-move, so a visible radar does not jump for a frame.
+            # The window is frameless, so geometry and frame position match.
+            self.setGeometry(x, y, new_side, new_side)
+        else:
+            self.resize(new_side, new_side)
+        # resizeEvent rebuilds too, but Qt delays it for a hidden widget until
+        # the next show; pens must match the new size before any paint.
+        self._rebuild_paint_cache()
+        self.update()
+
+    def set_alert_opacity(self, percent):
+        percent = look.coerce_alert_opacity(percent)
+        if percent == self.alert_opacity:
+            return
+        self.alert_opacity = percent
+        # Opacity only touches arcs, and arcs only exist while the decay timer
+        # runs, so its next tick (within 30 ms) paints them with the new value.
+        # A silent radar does not repaint while the player drags this slider.
+        if self.blips and not self.decay_timer.isActive():
+            self.update()
+
+    def set_outline_enabled(self, enabled):
+        enabled = look.coerce_outline_enabled(enabled)
+        if enabled == self.outline_enabled:
+            return
+        self.outline_enabled = enabled
         self.update()
 
     def mousePressEvent(self, event):
@@ -314,17 +373,18 @@ class OverlayRadar(QWidget):
         center = self._center
         radius = self._radius
 
-        painter.setPen(self._base_pen)
-        painter.drawEllipse(center, radius, radius)
+        if self.outline_enabled:
+            painter.setPen(self._base_pen)
+            painter.drawEllipse(center, radius, radius)
 
         if self.blips:
             arc_rect = self._arc_rect
             arc_color = self._arc_color
             arc_pen = self._arc_pen
             span_angle_16 = int(ARC_SPAN_DEG * 16)
+            opacity = self.alert_opacity
             for blip in self.blips:
-                # A future max-opacity setting scales this alpha.
-                arc_color.setAlpha(int(blip['life'] * 255))
+                arc_color.setAlpha(look.arc_alpha(blip['life'], opacity))
                 arc_pen.setColor(arc_color)
                 painter.setPen(arc_pen)   # QPainter copies the pen, so reuse is safe
 
@@ -334,6 +394,7 @@ class OverlayRadar(QWidget):
 
         if self.drag_enabled:
             painter.setPen(self._setup_pen)
-            painter.drawEllipse(center, radius + 8, radius + 8)
+            setup_radius = self._setup_radius
+            painter.drawEllipse(center, setup_radius, setup_radius)
 
         painter.end()

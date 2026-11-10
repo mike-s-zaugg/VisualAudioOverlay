@@ -204,6 +204,41 @@
                     </div>
                 </div>
 
+                <!-- Overlay size, alert opacity and outline. One group (like
+                     Sensitivity in SETTINGS) so the three rows fit beside Color
+                     without making this fixed-height card any taller. -->
+                <div class="custom-col">
+                    <h3 class="group-title">Overlay</h3>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Size</span>
+                            <span class="value" id="overlay-size-val">100 % &middot; 300 px</span>
+                        </div>
+                        <input type="range" class="slider" id="overlay-size" min="50" max="200" step="10"
+                            value="100" aria-label="Overlay size"
+                            oninput="AR.setOverlaySize(this.value)">
+                    </div>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Alert opacity</span>
+                            <span class="value" id="alert-opacity-val">100 %</span>
+                        </div>
+                        <input type="range" class="slider" id="alert-opacity" min="20" max="100" step="5"
+                            value="100" aria-label="Alert opacity"
+                            oninput="AR.setAlertOpacity(this.value)">
+                    </div>
+                    <div class="control">
+                        <div class="control-head">
+                            <span>Show outline</span>
+                            <label class="switch" title="Show the faint ring around the radar">
+                                <input type="checkbox" id="outline-enabled" checked aria-label="Show outline"
+                                    onchange="AR.setOutlineEnabled(this.checked)">
+                                <span class="switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Preview -->
                 <div class="custom-col custom-col--preview">
                     <h3 class="group-title">Preview</h3>
