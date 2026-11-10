@@ -9,6 +9,7 @@ design/
 !assets/icon.png
 profiles.json
 settings.json
+perf.log
 # legacy UI; v2 lives in dashboard_v2/
 dashboard/
 .claude/

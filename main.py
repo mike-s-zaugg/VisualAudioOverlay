@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QIcon
 
 from audio_capture import AudioCaptureThread
 from overlay import OverlayRadar
+from perf_stats import LOG_NAME as PERF_LOG_NAME, PerfLog, PerfStats, enabled_from_env
 
 # RESOURCE_DIR = where bundled, read-only assets live. When packaged by
 # PyInstaller (onefile), datas are extracted to sys._MEIPASS; in dev it's the
@@ -24,6 +25,11 @@ else:
 
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+
+# Opt-in performance log (set VAO_PERF=1 before launching). Read once here; when
+# off, no counters exist and the overlay/capture hot paths pay one None check.
+PERF_ENABLED = enabled_from_env()
+PERF_LOG_FILE = os.path.join(DATA_DIR, PERF_LOG_NAME)
 
 # Resolved against RESOURCE_DIR so it works both in dev and inside the
 # packaged .exe.
@@ -425,8 +431,15 @@ class AudioRadarApp(QMainWindow):
         self.mono_enabled = bool(self.settings.get("mono_enabled", False))
         self.mono_device = self.settings.get("mono_device") or None
 
+        # Perf counters (None unless VAO_PERF=1). Created before the overlay and
+        # the capture thread because both take it as a constructor argument.
+        self.perf = None
+        self._perf_log = None
+        if PERF_ENABLED:
+            self._start_perf_log()
+
         # Overlay (PyQt6 transparent window - unchanged)
-        self.overlay = OverlayRadar()
+        self.overlay = OverlayRadar(perf=self.perf)
 
         # Overlay appearance (accent colour + stroke). Persisted in settings.json so
         # the look survives restarts; applied to the overlay now and pushed to the
@@ -465,10 +478,37 @@ class AudioRadarApp(QMainWindow):
         self.update_thread.updateFound.connect(self.bridge.updateAvailable)
         self.update_thread.start()
 
+    # ── Perf log (VAO_PERF=1 only) ────────────────────────────────────
+    def _start_perf_log(self):
+        try:
+            stats = PerfStats()
+            log = PerfLog(PERF_LOG_FILE, stats)
+        except OSError as e:
+            print(f"VAO_PERF: cannot write {PERF_LOG_FILE} ({e}); perf log off.")
+            return
+        self.perf = stats
+        self._perf_log = log
+        # Periodic wake-up, but only when the user asked for the perf log: one
+        # summary line per second is what makes before/after runs comparable.
+        self._perf_timer = QTimer(self)
+        self._perf_timer.setInterval(1000)
+        self._perf_timer.timeout.connect(log.flush)
+        self._perf_timer.start()
+        print(f"VAO_PERF on: writing {PERF_LOG_FILE}")
+
+    def _stop_perf_log(self):
+        if self._perf_log is not None:
+            self._perf_timer.stop()
+            self._perf_log.flush()
+            self._perf_log.close()
+            self._perf_log = None
+
     # ── Audio Callbacks ───────────────────────────────────────────────
     def on_audio_data(self, angle: float, intensity: float):
         if self.invert_direction:
             angle = -angle
+        # The overlay drops events itself while hidden (cheap isVisible check),
+        # so nothing piles up between Stop and the next Start or hotkey show.
         self.overlay.update_audio_data(angle, intensity)
 
     def on_device_info(self, name: str, channels: int):
@@ -483,7 +523,7 @@ class AudioRadarApp(QMainWindow):
     def _new_audio_thread(self):
         """QThreads aren't restartable, so a fresh (idle) thread is created here
         on init, after every Stop, and on every mid-session capture restart."""
-        self.audio_thread = AudioCaptureThread()
+        self.audio_thread = AudioCaptureThread(perf=self.perf)
         self.audio_thread.audio_data_signal.connect(self.on_audio_data)
         self.audio_thread.device_info_signal.connect(self.on_device_info)
         self.audio_thread.status_signal.connect(self.on_capture_status)
@@ -911,6 +951,7 @@ class AudioRadarApp(QMainWindow):
         except Exception:
             pass
         self.overlay.close()
+        self._stop_perf_log()
         event.accept()
 
 

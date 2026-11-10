@@ -28,7 +28,7 @@ jobs:
         run: >-
           python -m compileall -q
           main.py audio_capture.py overlay.py
-          process_loopback.py mono_output.py direction.py
+          process_loopback.py mono_output.py direction.py perf_stats.py
 
   test:
     name: Unit tests

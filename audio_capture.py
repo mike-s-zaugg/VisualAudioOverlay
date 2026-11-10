@@ -14,8 +14,10 @@ class AudioCaptureThread(QThread):
     status_signal = pyqtSignal(str)
 
     def __init__(self, sensitivity=0.005, gain=1.0, freq_low=20, freq_high=20000, max_amplitude=1.0,
-                 target_pid=None, target_name=None):
+                 target_pid=None, target_name=None, perf=None):
         super().__init__()
+        # Optional perf_stats.PerfStats (VAO_PERF=1); None costs one check per chunk.
+        self._perf = perf
         self.sensitivity = sensitivity
         self.gain = gain
         self.freq_low = freq_low
@@ -225,6 +227,14 @@ class AudioCaptureThread(QThread):
                     "All audio devices failed - stop and restart the radar")
     
     def _process_chunk(self, data, use_surround):
+        if self._perf is None:
+            self._analyse_chunk(data, use_surround)
+            return
+        t0 = time.perf_counter()
+        self._analyse_chunk(data, use_surround)
+        self._perf.record_chunk((time.perf_counter() - t0) * 1000.0)
+
+    def _analyse_chunk(self, data, use_surround):
         # Band-limited per-channel RMS (Hann-windowed FFT + Parseval; the
         # direction math only ever needs levels, never a filtered waveform).
         rms = band_rms(data, self.samplerate, self.freq_low, self.freq_high) * self.gain
