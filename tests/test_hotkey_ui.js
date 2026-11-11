@@ -150,7 +150,14 @@ function key(keyCode, mods = "") {
     };
 }
 function press(keyCode, mods) { const e = key(keyCode, mods); win.fire("keydown", e); return e; }
-function captureListeners() { return win.count("keydown") + win.count("blur") + doc.count("visibilitychange"); }
+// The capture listeners only. The document also keeps the permanent dropdown
+// guard (keydown, visibilitychange; see installPopupGuard), which is not counted.
+function hkCount(t, type, fn) { return t.list.filter(l => l.type === type && l.fn === fn).length; }
+function docVisibility() { return hkCount(doc, "visibilitychange", sandbox.onHotkeyCaptureVisibility); }
+function captureListeners() { return win.count("keydown") + win.count("blur") + docVisibility(); }
+// The modal's own Esc listener. The document also has the permanent dropdown
+// guard listening for keydown (see installPopupGuard), which is not counted.
+function modalKeyListeners() { return doc.list.filter(l => l.type === "keydown" && l.fn === sandbox.onHotkeyModalKey).length; }
 
 const BOUND = { combo: "Ctrl+Shift+H", state: "ok", effective: "Ctrl+Shift+H", requested: "",
     error: "", capturing: false, can_choose: true };
@@ -246,7 +253,7 @@ W.AR.startHotkeyCapture();
 check("capturing", W.isHotkeyCapturing() === true);
 check("set_hotkey_capture(true) once", J(callsTo("set_hotkey_capture")) === '[["set_hotkey_capture",true]]', J(calls));
 check("keydown listener attached (capture phase)", win.list.some(l => l.type === "keydown" && l.capture), J(win.list.map(l => l.type)));
-check("blur and visibilitychange listeners attached", win.count("blur") === 1 && doc.count("visibilitychange") === 1);
+check("blur and visibilitychange listeners attached", win.count("blur") === 1 && docVisibility() === 1);
 check("modal opened", !hidden("hotkey-modal"));
 check("card button says Press keys...", text("hotkey-btn") === "Press keys...", text("hotkey-btn"));
 check("modal button says Press keys...", text("hotkey-capture-btn") === "Press keys...", text("hotkey-capture-btn"));
@@ -316,9 +323,10 @@ check("button shows the binding again", text("hotkey-btn") === "Ctrl+Shift+H", t
 check("hint back to idle", text("hotkey-hint") === "Starts or stops the radar while you play.", text("hotkey-hint"));
 check("modal stays open after Esc in capture", !hidden("hotkey-modal"));
 // A second Esc (not capturing) closes the modal through its own listener.
+check("modal key listener attached while open", modalKeyListeners() === 1, String(modalKeyListeners()));
 doc.fire("keydown", key(27));
 check("second Esc closes the modal", hidden("hotkey-modal"));
-check("modal key listener removed on close", doc.count("keydown") === 0);
+check("modal key listener removed on close", modalKeyListeners() === 0);
 check("focus back on the card button", els["hotkey-btn"].focused === 1);
 
 section("blur and page hide cancel");
@@ -347,7 +355,7 @@ check("modal stays open", !hidden("hotkey-modal"));
 W.AR.startHotkeyCapture(); clearCalls();
 W.AR.closeHotkey();
 check("closing while waiting cancels", J(callsTo("set_hotkey_capture")) === '[["set_hotkey_capture",false]]', J(calls));
-check("closing hides the modal and removes listeners", hidden("hotkey-modal") && captureListeners() === 0 && doc.count("keydown") === 0);
+check("closing hides the modal and removes listeners", hidden("hotkey-modal") && captureListeners() === 0 && modalKeyListeners() === 0);
 clearCalls();
 W.AR.closeHotkey();
 check("closing when idle calls nothing", calls.length === 0, J(calls));
@@ -568,7 +576,7 @@ try {
 } catch (err) { threw = err; }
 sandbox.bridge = savedBridge;
 check("no exception", threw === null, String(threw));
-check("listeners cleaned up", captureListeners() === 0 && doc.count("keydown") === 0);
+check("listeners cleaned up", captureListeners() === 0 && modalKeyListeners() === 0);
 
 // ── 11. House rules (all of dashboard_v2) ──────────────────────────────
 section("house rules");

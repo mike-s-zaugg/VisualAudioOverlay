@@ -69,3 +69,6 @@ jobs:
 
       - name: Dashboard tests (capture device)
         run: node tests/test_capture_device_ui.js
+
+      - name: Dashboard tests (quiet dropdowns)
+        run: node tests/test_popup_quiet.js

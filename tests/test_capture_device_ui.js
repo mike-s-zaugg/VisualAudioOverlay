@@ -97,6 +97,9 @@ function load(opts = {}) {
         has() { return true; },
     });
     const domReady = [];
+    const docListeners = [];
+    const fireDoc = (type, ev, capture) =>
+        docListeners.filter(l => l.type === type && l.capture === capture).forEach(l => l.fn(ev));
     const sandbox = {
         console,
         document: {
@@ -107,7 +110,10 @@ function load(opts = {}) {
                 return els[id];
             },
             createElement() { return new Option(); },
-            addEventListener(type, fn) { if (type === "DOMContentLoaded") domReady.push(fn); },
+            addEventListener(type, fn, capture) {
+                if (type === "DOMContentLoaded") domReady.push(fn);
+                else docListeners.push({ type, fn, capture: !!capture });   // the dropdown guard
+            },
             removeEventListener() {},
         },
         window: null,
@@ -138,6 +144,16 @@ function load(opts = {}) {
         W: sandbox, els, calls, sandbox,
         signal(name, ...args) { if (handlers[name]) handlers[name](...args); return !!handlers[name]; },
         connected: name => name in handlers,
+        // Popup lifetime, as the page sees it: a press opens, a pick (change)
+        // or focus moving to another element closes. See installPopupGuard.
+        press(sel) { fireDoc("pointerdown", { target: sel, button: 0 }, true); },
+        pick(sel, value, onchange) {
+            sel.value = value;
+            fireDoc("change", { target: sel }, true);
+            if (onchange) onchange();                    // the select's inline onchange
+            fireDoc("change", { target: sel }, false);
+        },
+        blurTo(sel, other) { fireDoc("blur", { target: sel, relatedTarget: other }, true); },
     };
 }
 
@@ -245,7 +261,8 @@ t = load();
 sel = t.els["capture-device-select"];
 t.W.onCaptureDevicesChanged(devs({ selected: "SteelSeries Sonar - Gaming" }));
 n = sel.rebuilds;
-t.sandbox.document.activeElement = sel;               // popup open
+t.press(sel);                                         // popup open
+t.calls.length = 0;
 t.W.onCaptureDevicesChanged(devs({ devices: DEVICES.concat([{ name: "USB Headset", channels: 2 }]),
     selected: "SteelSeries Sonar - Gaming" }));
 check("options untouched while open", sel.options.length === 4 && sel.rebuilds === n, String(sel.options.length));
@@ -253,28 +270,27 @@ check("selection untouched while open", sel.value === "SteelSeries Sonar - Gamin
 t.W.onCaptureDevicesChanged(devs({ devices: DEVICES.concat([{ name: "USB Headset", channels: 2 }]),
     selected: "SteelSeries Sonar - Gaming" }));
 check("a second reply while open still waits", sel.options.length === 4 && sel.rebuilds === n);
-sel.fire("blur");
-t.sandbox.document.activeElement = null;
-check("deferred fill applied on blur", sel.options.length === 5 && sel.labels()[4] === "USB Headset (2 ch)",
+check("no bridge call while open", t.calls.length === 0, J(t.calls));
+t.blurTo(sel, t.els["monitor-select"]);
+check("deferred fill applied when focus moves on", sel.options.length === 5 && sel.labels()[4] === "USB Headset (2 ch)",
     J(sel.labels()));
-check("applied once", sel.rebuilds === n + 1, String(sel.rebuilds - n));
+check("applied once (the second reply was the same list)", sel.rebuilds === n + 1, String(sel.rebuilds - n));
+check("the press asked for a fresh list, after close", J(t.calls) === J([["refresh_capture_devices"]]), J(t.calls));
 check("selection kept", sel.value === "SteelSeries Sonar - Gaming", sel.value);
 
 section("user picks while a fill is waiting");
+t.press(sel);
 t.calls.length = 0;
-t.sandbox.document.activeElement = sel;
 t.W.onCaptureDevicesChanged(devs({ selected: "SteelSeries Sonar - Gaming" }));   // USB Headset gone
-sel.value = "Speakers (Realtek(R) Audio)";
-t.W.AR.setCaptureDevice(sel.value);                   // inline onchange
-sel.fire("change");                                   // fillSelect's flush listener
-t.sandbox.document.activeElement = null;
+t.pick(sel, "Speakers (Realtek(R) Audio)", () => t.W.AR.setCaptureDevice(sel.value));
 check("the pick wins over the queued fill", sel.value === "Speakers (Realtek(R) Audio)", sel.value);
 check("queued options landed", sel.options.length === 4, String(sel.options.length));
-check("the pick went to Python", J(t.calls) === J([["set_capture_device", "Speakers (Realtek(R) Audio)"]]), J(t.calls));
+check("the pick went to Python, then the refresh the press asked for",
+    J(t.calls) === J([["set_capture_device", "Speakers (Realtek(R) Audio)"], ["refresh_capture_devices"]]), J(t.calls));
 check("title follows the pick", sel.attrs.title === "Speakers (Realtek(R) Audio) (2 ch, default)", sel.attrs.title);
 
-section("another select open does not block this one");
-t.sandbox.document.activeElement = t.els["program-select"];
+section("focus on another select does not block this one");
+t.sandbox.document.activeElement = t.els["program-select"];   // focused, not pressed
 t.W.onCaptureDevicesChanged(devs({ selected: "" }));
 t.sandbox.document.activeElement = null;
 check("filled at once", sel.value === "", sel.value);
@@ -300,7 +316,10 @@ const selTag = (html.match(/<select id="capture-device-select"[^>]*>/) || [""])[
 check("the select exists with the Monitor select's classes", /class="select"/.test(selTag), selTag);
 check("it sits in a select-wrap", /<div class="select-wrap">\s*<select id="capture-device-select"/.test(html));
 check("onchange calls AR.setCaptureDevice(this.value)", /onchange="AR\.setCaptureDevice\(this\.value\)"/.test(selTag), selTag);
-check("onmousedown calls AR.refreshCaptureDevices()", /onmousedown="AR\.refreshCaptureDevices\(\)"/.test(selTag), selTag);
+// The refresh on press is not inline any more: it must not run while the popup
+// opens. The guard runs it after close (REFRESH_AFTER_POPUP in script.js).
+check("no inline onmousedown refresh", !/onmousedown/.test(selTag), selTag);
+check("the guard refreshes it after its popup", /"capture-device-select": "captureDevices"/.test(src));
 check("it has an accessible name and points at the status line",
     /aria-label="Audio device"/.test(selTag) && /aria-describedby="capture-status"/.test(selTag), selTag);
 check("Windows default is there before any data", /<option value="">Windows default<\/option>/.test(html));

@@ -5,7 +5,7 @@ import os
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, QThread, QTimer
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, QThread, QTimer, Qt
 from PyQt6.QtGui import QColor, QIcon
 
 import hotkeys
@@ -172,6 +172,7 @@ class Bridge(QObject):
     hotkeyChanged = pyqtSignal(str)            # Start/Stop hotkey binding state as JSON
     captureDevicesChanged = pyqtSignal(str)    # capturable output devices + saved choice as JSON
     captureInfoChanged = pyqtSignal(str)       # what is captured right now (device, layout, mode, note) as JSON
+    appDeactivated = pyqtSignal()              # the whole application lost activation (alt-tab away)
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -559,6 +560,15 @@ class AudioRadarApp(QMainWindow):
 
         # Bridge object exposed to JS
         self.bridge = Bridge(self)
+
+        # Tell the dashboard when the whole application stops being the active
+        # one (alt-tab to the game). It ends a dropdown's quiet period on this:
+        # a <select> popup is a window of this same application, so the popup's
+        # own focus churn never makes the application inactive.
+        qt_app = QApplication.instance()
+        if qt_app is not None:
+            qt_app.applicationStateChanged.connect(self.on_application_state_changed)
+
         self.overlay.positionChanged.connect(self.on_overlay_position_changed)
         self.overlay.positionPreview.connect(self.on_overlay_position_preview)
 
@@ -629,6 +639,18 @@ class AudioRadarApp(QMainWindow):
     def on_device_info(self, name: str, channels: int):
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
+
+    def on_application_state_changed(self, state):
+        """Any state other than active (inactive, hidden, suspended) means no
+        window of this application has focus, so no dropdown popup is open.
+
+        Never while a Qt popup is up: if a popup ever made the application
+        look inactive for a moment, the dashboard would apply its held-back
+        updates onto that open popup."""
+        if QApplication.activePopupWidget() is not None:
+            return
+        if state != Qt.ApplicationState.ApplicationActive:
+            self.bridge.appDeactivated.emit()
 
     def on_capture_status(self, message: str):
         """Capture-thread problems (device lost, fallback taken) surfaced on the

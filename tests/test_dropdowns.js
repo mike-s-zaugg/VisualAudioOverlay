@@ -47,6 +47,18 @@ class Generic {
 const els = {};
 for (const id of SELECT_IDS) els[id] = new Select(id);
 
+// Document listeners (the dropdown guard, see installPopupGuard), so a test can
+// press, pick and blur like the page does. DOMContentLoaded is still swallowed.
+const docListeners = [];
+function fireDoc(type, ev, capture) {
+    docListeners.filter(l => l.type === type && l.capture === capture).forEach(l => l.fn(ev));
+}
+// A press on a select (the popup starts opening), a pick (change), and focus
+// moving on to another element of the page.
+function press(sel) { fireDoc("pointerdown", { target: sel, button: 0 }, true); fireDoc("mousedown", { target: sel, button: 0 }, true); }
+function pick(sel, value) { sel.value = value; fireDoc("change", { target: sel }, true); fireDoc("change", { target: sel }, false); }
+function blurTo(sel, other) { fireDoc("blur", { target: sel, relatedTarget: other }, true); }
+
 const calls = [];
 const bridge = new Proxy({}, {
     get(_t, name) {
@@ -66,7 +78,9 @@ const sandbox = {
             return els[id];
         },
         createElement() { return new Option(); },
-        addEventListener() {},                                  // swallow DOMContentLoaded
+        addEventListener(type, fn, capture) {                   // swallow DOMContentLoaded
+            if (type !== "DOMContentLoaded") docListeners.push({ type, fn, capture: !!capture });
+        },
     },
     window: null,
     bridge,
@@ -92,12 +106,24 @@ const mono = els["mono-output-select"];
 const W = sandbox.window;
 
 // ── 1. isSelectOpen ────────────────────────────────────────────────────
+// Open means pressed and not closed yet: focus alone does not count (the popup
+// steals and returns focus while it opens, see "Quiet dropdowns" in script.js).
 section("isSelectOpen");
-check("false when nothing focused", W.isSelectOpen() === false);
+check("false when nothing is pressed", W.isSelectOpen() === false);
 sandbox.document.activeElement = program;
-check("true for any select when one is focused", W.isSelectOpen() === true);
-check("true for the focused select", W.isSelectOpen(program) === true);
+check("focus alone is not open", W.isSelectOpen() === false);
+press(program);
+check("true for any select once one is pressed", W.isSelectOpen() === true);
+check("true for the pressed select", W.isSelectOpen(program) === true);
 check("false for a different select", W.isSelectOpen(preset) === false);
+blurTo(program, null);
+check("a blur with nowhere to go (popup focus churn) keeps it open", W.isSelectOpen(program) === true);
+check("no bridge call while it is open", calls.length === 0, JSON.stringify(calls));
+blurTo(program, preset);
+check("focus moving to another element closes it", W.isSelectOpen() === false);
+check("the Program refresh runs once it has closed", JSON.stringify(calls) === '[["refresh_programs"]]',
+    JSON.stringify(calls));
+calls.length = 0;
 sandbox.document.activeElement = null;
 
 // ── 2. Preset restore across two-signal arrival ────────────────────────
@@ -148,24 +174,21 @@ check("baseline list built", program.labels().join(",") === "All (system audio),
     program.labels().join(","));
 program.value = "cs2.exe";
 
-sandbox.document.activeElement = program;                 // user opens the popup
+press(program);                                           // user opens the popup
 W.onProgramsChanged(JSON.stringify(["cs2.exe", "Discord.exe", "chrome.exe"]));
 check("options untouched while open", program.options.length === 3, String(program.options.length));
 check("selection untouched while open", program.value === "cs2.exe", program.value);
 
-program.fire("blur");                                     // user clicks away
-sandbox.document.activeElement = null;
+blurTo(program, preset);                                  // focus moves on
 check("queued rebuild applied on blur", program.options.length === 4, String(program.options.length));
 check("selection preserved through the flush", program.value === "cs2.exe", program.value);
 
 // ── 5. User picks during a deferred rebuild ────────────────────────────
 section("user picks while a rebuild is queued");
-sandbox.document.activeElement = program;
+press(program);
 W._programsSig = null;
 W.onProgramsChanged(JSON.stringify(["cs2.exe", "Discord.exe"]));   // chrome.exe disappears
-program.value = "Discord.exe";                                     // user picks it in the popup
-program.fire("change");
-sandbox.document.activeElement = null;
+pick(program, "Discord.exe");                                      // user picks it in the popup
 check("user's pick wins over the queued rebuild", program.value === "Discord.exe", program.value);
 check("queued options did land", program.options.length === 3, String(program.options.length));
 

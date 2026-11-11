@@ -14,6 +14,13 @@
  *
  *   set_program(str)            - per-app capture target
  *   programsChanged(jsonStr)    - list of running audio programs
+ *   refresh_programs()          - re-enumerate them (after the Program popup closes,
+ *                                 or at the first input after the window regains focus)
+ *
+ *   Every signal is held back while a dropdown popup is open and applied once it
+ *   closes (see "Quiet dropdowns" near fillSelect).
+ *   appDeactivated()            - the whole application lost activation (alt-tab);
+ *                                 ends a dropdown's quiet period. Guarded, not queued
  *
  *   Overlay look (guarded, see callBridge):
  *   set_overlay_size(int)       - radar size in percent, 50-200 (100 = 300 px)
@@ -45,7 +52,9 @@
  * Capture device (guarded: an older backend keeps the deviceChanged text):
  *   set_capture_device(str)     - output device to listen to, by name; "" follows
  *                                 the Windows default
- *   refresh_capture_devices()   - re-enumerate; the answer is captureDevicesChanged
+ *   refresh_capture_devices()   - re-enumerate; the answer is captureDevicesChanged.
+ *                                 Asked for after the dropdown's popup closes, never
+ *                                 while it is open (see "Quiet dropdowns")
  *   captureDevicesChanged(json) - {devices: [{name, channels, is_default}],
  *                                  selected, available}
  *   captureInfoChanged(json)    - {active, source, device, channels, layout, mode,
@@ -80,37 +89,39 @@ function initBridge() {
         new QWebChannel(qt.webChannelTransport, function (channel) {
             window.bridge = channel.objects.bridge;
 
-            bridge.statusChanged.connect(onStatusChanged);
-            bridge.deviceChanged.connect(onDeviceChanged);
-            bridge.profilesChanged.connect(onProfilesChanged);
-            bridge.monitorsChanged.connect(onMonitorsChanged);
-            bridge.presetsChanged.connect(onPresetsChanged);
-            bridge.overlayPositionChanged.connect(onOverlayPositionChanged);
-            // Optional new signals - only connect if the backend provides them.
-            if (bridge.programsChanged) bridge.programsChanged.connect(onProgramsChanged);
-            if (bridge.monoStateChanged) bridge.monoStateChanged.connect(onMonoStateChanged);
-            if (bridge.updateAvailable) bridge.updateAvailable.connect(onUpdateAvailable);
-            if (bridge.appearanceChanged) bridge.appearanceChanged.connect(onAppearanceChanged);
-            if (bridge.audioSettingsChanged) bridge.audioSettingsChanged.connect(onAudioSettingsChanged);
-            if (bridge.selectedPresetChanged) bridge.selectedPresetChanged.connect(onSelectedPresetChanged);
+            // Every signal goes through `listen`, which holds it back while a
+            // dropdown is open (see "Quiet dropdowns" below).
+            listen("statusChanged", onStatusChanged);
+            listen("deviceChanged", onDeviceChanged);
+            listen("profilesChanged", onProfilesChanged);
+            listen("monitorsChanged", onMonitorsChanged);
+            listen("presetsChanged", onPresetsChanged);
+            listen("overlayPositionChanged", onOverlayPositionChanged);
+            // Optional new signals - only connected if the backend provides them.
+            listen("programsChanged", onProgramsChanged);
+            listen("monoStateChanged", onMonoStateChanged);
+            listen("updateAvailable", onUpdateAvailable);
+            listen("appearanceChanged", onAppearanceChanged);
+            listen("audioSettingsChanged", onAudioSettingsChanged);
+            listen("selectedPresetChanged", onSelectedPresetChanged);
             // Capture device. Without these signals (older backend) the select only
             // offers Windows default and deviceChanged keeps writing the status line.
-            if (bridge.captureDevicesChanged) bridge.captureDevicesChanged.connect(onCaptureDevicesChanged);
-            if (bridge.captureInfoChanged) {
-                captureInfoOwnsStatus = true;
-                bridge.captureInfoChanged.connect(onCaptureInfoChanged);
+            listen("captureDevicesChanged", onCaptureDevicesChanged);
+            // The application lost activation. Not through listen: it is what
+            // ends a dropdown's lifetime. An older backend lacks it.
+            if (bridge.appDeactivated && typeof bridge.appDeactivated.connect === "function") {
+                bridge.appDeactivated.connect(onAppDeactivated);
             }
+            if (listen("captureInfoChanged", onCaptureInfoChanged)) captureInfoOwnsStatus = true;
             // Toggle hotkey. An older backend has neither the signal nor the slot,
             // so the Hotkey row would only show a sample binding: hide it instead.
-            if (bridge.hotkeyChanged && typeof bridge.set_toggle_hotkey === "function") {
-                bridge.hotkeyChanged.connect(onHotkeyChanged);
-            } else {
+            if (!(typeof bridge.set_toggle_hotkey === "function" && listen("hotkeyChanged", onHotkeyChanged))) {
                 toggleClass("hotkey-field", "is-hidden", true);
             }
 
             // Show the current version in the footer.
             if (bridge.get_app_version) {
-                bridge.get_app_version(function (v) { setText("footer-version", "v" + v); });
+                bridge.get_app_version(whenNoPopup(function (v) { setText("footer-version", "v" + v); }));
             }
 
             bridge.request_initial_data();
@@ -120,13 +131,13 @@ function initBridge() {
             // back from the game), so a game launched after startup shows up without
             // having to Start the radar first.
             //
-            // Skipped while any <select> popup is open - it is the popup itself
-            // stealing and returning focus, and answering that churn with a
-            // blocking COM enumeration is what grew the list. See isSelectOpen.
-            window.addEventListener("focus", () => {
-                if (isSelectOpen()) return;
-                AR.refreshPrograms();
-            });
+            // Not right away: a click into the window focuses it just before the
+            // press, and a dropdown popup steals and returns focus while it opens.
+            // The refresh runs at the next quiet moment instead (pointer moved,
+            // a key or a click outside a dropdown, or a dropdown closed). See
+            // requestRefresh. A focus during a dropdown's lifetime is queued
+            // the same way (it runs once that ends), so the list never stays stale.
+            window.addEventListener("focus", () => requestRefresh("programs", true));
 
             resolve();
         });
@@ -431,9 +442,9 @@ function onCaptureDevicesChanged(raw) {
 }
 
 // Put the device list into the select. Identical lists arrive on every refresh
-// (each time the dropdown opens), so an unchanged list with the right value
-// showing is skipped; anything else goes through fillSelect, which waits while
-// the popup is open (see isSelectOpen).
+// (each time the dropdown has been opened), so an unchanged list with the right
+// value showing is skipped; anything else goes through fillSelect, which waits
+// while any dropdown is open (see "Quiet dropdowns").
 function renderCaptureDevices() {
     const { opts, selected } = captureDeviceOptions(captureDevices, captureSelected);
     const sel = document.getElementById("capture-device-select");
@@ -868,6 +879,7 @@ function maybeRestorePreset() {
 // ── AR namespace (JS → Python) ─────────────────────────────────────────
 window.AR = {
     toggleRadar() {
+        if (swallowClick("radar")) return;   // the state changed under this click (CLICK_STATE)
         if (radarActive) bridge.stop_radar();
         else bridge.start_radar();
         // UI syncs authoritatively via statusChanged
@@ -952,6 +964,7 @@ window.AR = {
     },
 
     deletePreset() {
+        if (swallowClick("preset")) return;  // another preset showed when pressed (CLICK_STATE)
         const sel = document.getElementById("preset-select");
         const name = sel?.value;
         if (!name) return;
@@ -970,11 +983,10 @@ window.AR = {
         else console.log("set_program not wired yet; selected:", value);
     },
 
-    refreshPrograms() {
-        // Re-enumerate live audio programs when the dropdown is opened, so the
-        // game shows up even if it started playing after the app launched.
-        if (bridge.refresh_programs) bridge.refresh_programs();
-    },
+    // Re-enumerate live audio programs, so the game shows up even if it started
+    // playing after the app launched. Pressing the Program dropdown asks for this
+    // too, but it runs once the popup has closed (see REFRESH_AFTER_POPUP).
+    refreshPrograms() { requestRefresh("programs"); },
 
     // ── Capture device ─────────────────────────────────────────────
     // A name, or "" for the Windows default. Python answers with
@@ -986,9 +998,9 @@ window.AR = {
         syncCaptureSelectTitle();
     },
 
-    // Re-enumerate when the dropdown is about to open, like the Program select,
-    // so a device plugged in since shows up. The answer waits while it is open.
-    refreshCaptureDevices() { callBridge("refresh_capture_devices"); },
+    // Re-enumerate, so a device plugged in since shows up. Pressing the dropdown
+    // asks for this too, once its popup has closed (see REFRESH_AFTER_POPUP).
+    refreshCaptureDevices() { requestRefresh("captureDevices"); },
 
     // ── Mono output ────────────────────────────────────────────────
     setMonoEnabled(on) {
@@ -1008,6 +1020,7 @@ window.AR = {
     },
 
     toggleMoveMode() {
+        if (swallowClick("move")) return;    // the state changed under this click (CLICK_STATE)
         bridge.set_overlay_drag_enabled(!moveModeActive);
     },
 
@@ -1290,9 +1303,293 @@ function toggleClass(id, cls, on) { const el = document.getElementById(id); if (
 function intVal(id, def) { const el = document.getElementById(id); return el ? parseInt(el.value) : def; }
 function strVal(id, def) { const el = document.getElementById(id); return el ? el.value : def; }
 
-// Rebuilds queued because their <select> was open at the time:
-// { id: {opts, preferred} }.
-const _pendingFills = {};
+// ── Quiet dropdowns ────────────────────────────────────────────────────
+// QtWebEngine draws a <select> popup as a native Qt window (that is why the
+// open list is white instead of following our dark CSS). If the page changes
+// while that window is opening or open, Qt grows the rendered list instead of
+// redrawing it, leaving blank white space beside and under the entries. The
+// popup also takes focus off the page and hands it back while it opens, so
+// focus and blur events arrive in the middle of it.
+//
+// 9f74d4d guarded only the options of the select that had focus. Since then
+// more runs while a popup is up: the window focus event (it fires before the
+// press, while no select has focus yet) started a blocking program
+// enumeration, the Program and Audio Device presses re-enumerated, and the
+// replies, the live capture status, the mono hint, the radar status and the
+// hotkey row all changed the page underneath an open popup.
+//
+// So a dropdown's whole lifetime is quiet now:
+//   - It starts with the press itself (pointerdown/mousedown, or a key that
+//     opens a select), not with focus, so the focus churn is inside it.
+//   - While it lasts, every signal from Python is held back in arrival order
+//     (listen/whenNoPopup), nothing calls the bridge (requestRefresh waits),
+//     and no select is rebuilt (fillSelect waits).
+//   - It ends when the player picks an entry (change), or does anything else
+//     on the page: a click outside the select, a key press (the page only gets
+//     keys once the popup is closed), or focus moving to another element.
+//     A blur with nowhere to go is the popup's own focus churn (or the window
+//     losing focus) and does not end it.
+//   - It also ends when the page is hidden, and when Python reports that the
+//     whole application lost activation (appDeactivated: alt-tab to the game).
+//     The popup is a window of this application, so its focus churn never
+//     deactivates the application.
+//   - Then everything held back is applied in order, the player's pick
+//     outranking any deferred rebuild of that select, and only after that the
+//     refreshes the press asked for run, so their replies land on a closed list.
+// A popup closed without a pick (Esc, the same entry, a click on the select
+// itself) stays "open" until the next click, key, hidden page or deactivation.
+// That delays updates and never changes an open list. While it waits, runs of
+// the same "latest state" signal collapse into one (COALESCE), and a click that
+// ends it is checked against what the player saw (see CLICK_STATE).
+// Event driven, no timers.
+
+let popupSelect = null;           // the <select> whose popup is opening or open
+const popupDeferred = [];         // [fn, args] held back while it is, in order
+const refreshesDue = new Set();   // names from REFRESHES, run at the next quiet moment
+let popupPick = null;             // {id, value} while applying the held-back work
+let clickSwallow = new Set();     // CLICK_STATE keys a flush changed under this click
+
+// Bridge refreshes, by name. Each re-enumerates on the GUI thread in Python and
+// answers with a signal that rebuilds a select.
+const REFRESHES = {
+    programs: () => callBridge("refresh_programs"),
+    captureDevices: () => callBridge("refresh_capture_devices"),
+};
+// Pressing these dropdowns asks for a fresh list for the next time it opens.
+// It cannot be fresh for this time without a reply landing on the open popup.
+const REFRESH_AFTER_POPUP = { "program-select": "programs", "capture-device-select": "captureDevices" };
+
+// True while a dropdown popup is opening, open, or possibly closed without a
+// change (see above); with `sel`, only for that one.
+function isSelectOpen(sel) {
+    return popupSelect !== null && (!sel || popupSelect === sel);
+}
+
+// Signals whose handler only shows the latest state: a run of the same one in
+// the queue collapses into one item. Cross-signal order is kept (only the item
+// right before is merged), and a payload that is not a JSON object is queued as
+// is. statusChanged is not here: its stop-then-start pairs matter.
+const COALESCE = {
+    overlayPositionChanged: (a, b) => b,                     // full state each time
+    captureInfoChanged: (a, b) => b,                         // a payload replaces the last one
+    appearanceChanged: (a, b) => Object.assign({}, a, b),    // every key optional
+    audioSettingsChanged: (a, b) => {                        // every key optional
+        // A null or missing value in the newer item never overwrites a real one.
+        const m = Object.assign({}, a);
+        for (const k of Object.keys(b)) if (b[k] != null) m[k] = b[k];
+        // The frequency band only applies as a pair: keep the newest whole pair.
+        if (b.freq_low == null || b.freq_high == null) {
+            if (a.freq_low != null && a.freq_high != null) { m.freq_low = a.freq_low; m.freq_high = a.freq_high; }
+            else { delete m.freq_low; delete m.freq_high; }
+        }
+        return m;
+    },
+};
+
+// Merge `args` into the queue's last item when it is the same coalescing signal.
+function coalesceDeferred(name, args) {
+    const last = popupDeferred[popupDeferred.length - 1];
+    if (!name || !COALESCE[name] || !last || last[2] !== name) return false;
+    const a = parseCapturePayload(last[1][0]);
+    const b = parseCapturePayload(args[0]);
+    if (!a || !b) return false;
+    last[1] = [JSON.stringify(COALESCE[name](a, b))];
+    return true;
+}
+
+// `fn`, held back while a dropdown is open and applied in order once it closes.
+// `name` is the signal it handles (for COALESCE).
+function whenNoPopup(fn, name) {
+    return function (...args) {
+        if (popupSelect) {
+            if (!coalesceDeferred(name, args)) popupDeferred.push([fn, args, name]);
+            return;
+        }
+        fn(...args);
+    };
+}
+
+// Connect a bridge signal through whenNoPopup. False when the backend lacks it.
+function listen(name, fn) {
+    const sig = window.bridge && window.bridge[name];
+    if (!sig || typeof sig.connect !== "function") return false;
+    sig.connect(whenNoPopup(fn, name));
+    return true;
+}
+
+// Ask Python to re-enumerate. Runs now when no dropdown is open, unless `later`;
+// otherwise at the next quiet moment (runDueRefreshes).
+function requestRefresh(name, later) {
+    if (!REFRESHES[name]) return;
+    refreshesDue.add(name);
+    if (!later) runDueRefreshes();
+}
+
+function runDueRefreshes() {
+    if (popupSelect) return;
+    for (const name of Array.from(refreshesDue)) {
+        refreshesDue.delete(name);
+        REFRESHES[name]();
+    }
+}
+
+// The <select> an event is about, or null.
+function eventSelect(e) {
+    let el = e && e.target;
+    if (el && el.tagName === "OPTION") el = el.parentElement || el.parentNode;
+    return el && el.tagName === "SELECT" ? el : null;
+}
+
+// Keys that open a closed select in Chromium on Windows. Other keys on a
+// closed select (arrows, letters) change it in place and fire change; Enter
+// does not open it.
+function opensSelect(e) {
+    const k = e.key;
+    if (k === "F4" && !e.altKey) return true;
+    if ((k === "ArrowDown" || k === "ArrowUp") && e.altKey) return true;
+    return k === " ";
+}
+
+// A dropdown is about to open. Opening another one while the last is still
+// counted as open (closed without a pick) keeps the held-back work waiting.
+function beginPopup(sel) {
+    if (popupSelect === sel) return;
+    popupSelect = sel;
+    const refresh = REFRESH_AFTER_POPUP[sel.id];
+    if (refresh) refreshesDue.add(refresh);
+}
+
+// The dropdown has closed: apply the held-back work in order. `picked` keeps
+// the entry the player just chose over any deferred rebuild of that select.
+// One failing item never drops the rest.
+function endPopup(picked) {
+    if (!popupSelect) return;
+    const sel = popupSelect;
+    popupSelect = null;
+    popupPick = picked ? { id: sel.id, value: sel.value } : null;
+    try {
+        while (popupDeferred.length) {
+            const [fn, args] = popupDeferred.shift();
+            try { fn(...args); } catch (err) { console.error(err); }
+        }
+    } finally {
+        popupPick = null;
+    }
+}
+
+// Controls whose click acts on state that applying the held-back work can
+// change: the radar toggle (Start/End), Move/Done, the two switches, and Delete
+// (it deletes the preset showing). If a popup closed without a change, the
+// player saw the old state when they pressed; their click must not do the
+// opposite of what they saw. So the click that ends such a lifetime is dropped
+// for a control whose state changed under it, and the player sees the real
+// state and clicks again. The hotkey row needs no entry: its button only opens
+// the modal, which reads the state afresh, and Clear lives in that modal.
+const CLICK_STATE = {
+    radar: () => radarActive,
+    move: () => moveModeActive,
+    "mono-enabled": () => !!document.getElementById("mono-enabled")?.checked,
+    "outline-enabled": () => !!document.getElementById("outline-enabled")?.checked,
+    preset: () => document.getElementById("preset-select")?.value,
+};
+
+// End a lifetime at a click or key, noting which CLICK_STATE changed.
+function endPopupForInput() {
+    if (!popupSelect) return;
+    const before = {};
+    for (const k of Object.keys(CLICK_STATE)) before[k] = CLICK_STATE[k]();
+    endPopup();
+    for (const k of Object.keys(CLICK_STATE)) if (CLICK_STATE[k]() !== before[k]) clickSwallow.add(k);
+}
+
+// True once (and forgets it) when this click must be dropped for `key`.
+function swallowClick(key) {
+    if (!clickSwallow.has(key)) return false;
+    clickSwallow.delete(key);
+    return true;
+}
+
+function onPagePress(e) {
+    // A new press starts with a clean slate (mousedown follows its own pointerdown).
+    if (e.type !== "mousedown") clickSwallow.clear();
+    const sel = eventSelect(e);
+    if (sel && (e.button == null || e.button === 0)) { beginPopup(sel); return; }
+    // A press elsewhere (the page closes any popup before it handles a press).
+    endPopupForInput();
+    runDueRefreshes();
+}
+
+function onPageKey(e) {
+    clickSwallow.clear();
+    const sel = eventSelect(e);
+    if (sel && opensSelect(e)) { beginPopup(sel); return; }
+    endPopupForInput();
+    runDueRefreshes();
+}
+
+// A switch whose state changed under the click: cancel the click, which keeps
+// the checkbox as it now is and fires no change.
+function onPageClickCapture(e) {
+    const t = e.target;
+    if (t && (t.id === "mono-enabled" || t.id === "outline-enabled") && swallowClick(t.id)) e.preventDefault();
+}
+// After the click's own handlers: forget what was not used, so it never sticks.
+// A click on a switch's label is followed by a click on its input, so that
+// first one leaves it for the input.
+function onPageClick(e) {
+    const t = e.target;
+    const inLabel = t && t.tagName !== "INPUT" && typeof t.closest === "function" && t.closest("label");
+    if (!inLabel) clickSwallow.clear();
+}
+
+// A hidden page, or the whole application losing activation, cannot have a
+// popup open: end the lifetime. Python sends appDeactivated directly (not
+// through the queue). On deactivation the due refreshes wait: the game is
+// taking focus, and the window focus on return asks for them again.
+function onPageVisibility() {
+    if (!document.hidden) return;
+    endPopup();
+    runDueRefreshes();
+}
+function onAppDeactivated() {
+    endPopup();
+}
+
+// Picking an entry. Capture phase: the held-back work lands before the
+// select's own onchange reads the pick, and the pick wins over it.
+function onPageChangeCapture(e) {
+    if (popupSelect && e.target === popupSelect) endPopup(true);
+}
+// Bubble phase, after the select's onchange has told Python about the pick:
+// now the refreshes, so their replies carry the new choice.
+function onPageChange() { runDueRefreshes(); }
+
+// Focus moving to another element of the page ends it; a blur with no new
+// target is the popup's focus churn or the window losing focus.
+function onPageBlur(e) {
+    if (!popupSelect || e.target !== popupSelect || !e.relatedTarget) return;
+    endPopup();
+    runDueRefreshes();
+}
+
+function onPagePointerMove() {
+    if (!popupSelect && refreshesDue.size) runDueRefreshes();
+}
+
+function installPopupGuard() {
+    if (!document.addEventListener) return;
+    document.addEventListener("pointerdown", onPagePress, true);
+    document.addEventListener("mousedown", onPagePress, true);
+    document.addEventListener("keydown", onPageKey, true);
+    document.addEventListener("change", onPageChangeCapture, true);
+    document.addEventListener("change", onPageChange, false);
+    document.addEventListener("blur", onPageBlur, true);
+    document.addEventListener("pointermove", onPagePointerMove, true);
+    document.addEventListener("click", onPageClickCapture, true);
+    document.addEventListener("click", onPageClick, false);
+    document.addEventListener("visibilitychange", onPageVisibility);
+}
+installPopupGuard();
 
 // Follow-up work to run once a select's options have actually landed in the DOM.
 // Registered per id so a *deferred* fill still triggers what its caller expected
@@ -1300,63 +1597,15 @@ const _pendingFills = {};
 const _fillSettled = { "preset-select": maybeRestorePreset,
     "capture-device-select": syncCaptureSelectTitle };
 
-// QtWebEngine draws <select> popups natively (that is why the open list is white
-// instead of following our dark CSS - the popup is a Qt widget, not DOM). Two
-// consequences, and both feed the runaway-dropdown bug:
-//
-//   1. Swapping the options while the popup is open makes Qt GROW the rendered
-//      list instead of redrawing it, leaving a blank strip under the real
-//      entries that gets taller with every rebuild.
-//   2. The popup is a separate window, so opening it takes focus off the web
-//      view and hands it straight back, repeatedly, for as long as it stays
-//      open - and the focus handler answered every round with a blocking COM
-//      enumeration whose reply rebuilt the very list being displayed.
-//
-// `document.activeElement` stays on the <select> for as long as its popup is up,
-// so it answers both questions. It also stays there after the popup closes until
-// focus moves on, which only makes this over-cautious, never wrong.
-//
-// 49b828f fixed one instance by diff-guarding the program list, but that only
-// helps while the list is unchanged - any real change (a game starting or
-// stopping audio) still rebuilt an open popup. This is the general fix and
-// covers every dropdown, so it protects the preset list too.
-function isSelectOpen(sel) {
-    const active = document.activeElement;
-    if (!active || active.tagName !== "SELECT") return false;
-    return sel ? active === sel : true;
-}
-
 // Replace a <select>'s options. `preferred` is the value to end up selected;
 // omit it to keep the current pick. See applySelectOptions for the fallbacks.
+// While a dropdown is open (any of them) it waits, in order with the signals.
 function fillSelect(id, opts, preferred) {
     const sel = document.getElementById(id);
     if (!sel) return;
-    if (isSelectOpen(sel)) {
-        // Flush on change AND blur: picking an entry closes the popup without
-        // blurring, and clicking away blurs without a change. `once` is safe
-        // because we only re-arm when another fill is queued.
-        if (!(id in _pendingFills)) {
-            sel.addEventListener("change", () => flushSelectFill(id, true), { once: true });
-            sel.addEventListener("blur", () => flushSelectFill(id), { once: true });
-        }
-        _pendingFills[id] = { opts, preferred };
-        return;
-    }
-    delete _pendingFills[id];
+    if (popupSelect) { popupDeferred.push([fillSelect, [id, opts, preferred]]); return; }
+    if (popupPick && popupPick.id === id) preferred = popupPick.value;
     applySelectOptions(sel, opts, preferred);
-    _fillSettled[id]?.();
-}
-
-// Apply a rebuild that was deferred while the popup was open. `userPicked` marks
-// the flush as triggered by the user choosing an entry, so their choice outranks
-// whatever value the queued rebuild wanted.
-function flushSelectFill(id, userPicked) {
-    if (!(id in _pendingFills)) return;
-    const { opts, preferred } = _pendingFills[id];
-    delete _pendingFills[id];
-    const sel = document.getElementById(id);
-    if (!sel) return;
-    applySelectOptions(sel, opts, userPicked ? sel.value : preferred);
     _fillSettled[id]?.();
 }
 
