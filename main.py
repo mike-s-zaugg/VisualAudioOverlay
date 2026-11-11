@@ -10,7 +10,9 @@ from PyQt6.QtGui import QColor, QIcon
 
 import hotkeys
 import look
-from audio_capture import AudioCaptureThread
+from audio_capture import AudioCaptureThread, list_capture_devices
+from capture_state import (capture_devices_payload, coerce_capture_device,
+                           inactive_capture_info)
 from global_hotkey import create_backend as create_hotkey_backend
 from overlay import OverlayRadar
 from perf_stats import LOG_NAME as PERF_LOG_NAME, PerfLog, PerfStats, enabled_from_env
@@ -168,6 +170,8 @@ class Bridge(QObject):
     selectedPresetChanged = pyqtSignal(str)    # preset/profile name to restore in the dropdown
     audioSettingsChanged = pyqtSignal(str)     # all five live audio params, so JS moves the sliders
     hotkeyChanged = pyqtSignal(str)            # Start/Stop hotkey binding state as JSON
+    captureDevicesChanged = pyqtSignal(str)    # capturable output devices + saved choice as JSON
+    captureInfoChanged = pyqtSignal(str)       # what is captured right now (device, layout, mode, note) as JSON
 
     def __init__(self, app: "AudioRadarApp"):
         super().__init__()
@@ -228,6 +232,20 @@ class Bridge(QObject):
         the Program dropdown, so the list is live (a program only appears once it
         is actually playing audio)."""
         self._app.emit_programs()
+
+    # ── Capture device (which output is looped back) ──────────────────
+    @pyqtSlot(str)
+    def set_capture_device(self, name: str):
+        """Output device to capture, by name ("" = follow the Windows
+        default). Restarts a running system capture when it changed. Always
+        answered with captureDevicesChanged."""
+        self._app.set_capture_device(name)
+
+    @pyqtSlot()
+    def refresh_capture_devices(self):
+        """Re-enumerate output devices. JS calls this when the Audio Device
+        dropdown is opened, so a headset plugged in later shows up."""
+        self._app.emit_capture_devices()
 
     # ── Mono output (single-sided listeners) ──────────────────────────
     @pyqtSlot(bool)
@@ -327,8 +345,8 @@ class Bridge(QObject):
         """Expects JSON with at least { name } plus whatever the UI captures:
         sensitivity, gain, preset, freq_low, freq_high, max_amp, invert, and
         (since richer profiles) program, monitor, mono_enabled, mono_device,
-        accent_color, thickness, overlay_size, alert_opacity, outline_enabled.
-        Older profiles missing keys still load."""
+        capture_device, accent_color, thickness, overlay_size, alert_opacity,
+        outline_enabled. Older profiles missing keys still load."""
         try:
             data = json.loads(json_str)
             name = data.get("name", "").strip()
@@ -343,6 +361,9 @@ class Bridge(QObject):
                                 ("alert_opacity", look.coerce_alert_opacity),
                                 ("outline_enabled", look.coerce_outline_enabled)):
                 data[key] = coerce(data[key]) if key in data else live_look[key]
+            data["capture_device"] = (coerce_capture_device(data["capture_device"])
+                                      if "capture_device" in data
+                                      else self._app.capture_device)
             self._app.profiles[name] = data
             self._app._save_profiles()
             # The profile you just made is the one you are working in - selecting
@@ -415,6 +436,11 @@ class Bridge(QObject):
 
         # Mono-output devices + VB-CABLE detection
         self._app.emit_mono_state()
+
+        # Capture device list + saved choice, and what is captured right now
+        # (active false while the radar is stopped).
+        self._app.emit_capture_devices()
+        self._app.emit_capture_info()
 
         # Start/Stop hotkey. A freshly loaded page is never waiting for a key
         # press: if the old page went away mid-capture (reload, crash), its
@@ -489,6 +515,14 @@ class AudioRadarApp(QMainWindow):
         # user's choice survives restarts; applied to the audio thread on Start.
         self.mono_enabled = bool(self.settings.get("mono_enabled", False))
         self.mono_device = self.settings.get("mono_device") or None
+
+        # Which output device is looped back, by name ("" = the Windows
+        # default). Missing or junk = "", and nothing is written back at
+        # startup. What is really being captured (it can differ: unplugged,
+        # per-app, fallback) is tracked in capture_info from the thread.
+        self.capture_device = coerce_capture_device(self.settings.get("capture_device"))
+        self.capture_info = inactive_capture_info()
+        self._capture_devices = None    # last enumerated list (emit_capture_devices)
 
         # Perf counters (None unless VAO_PERF=1). Created before the overlay and
         # the capture thread because both take it as a constructor argument.
@@ -608,6 +642,56 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.audio_data_signal.connect(self.on_audio_data)
         self.audio_thread.device_info_signal.connect(self.on_device_info)
         self.audio_thread.status_signal.connect(self.on_capture_status)
+        self.audio_thread.capture_info_signal.connect(self.on_capture_info)
+        # The old thread has ended (every caller stopped it first). Its own
+        # "active false" may still be queued, and on_capture_info ignores a
+        # replaced thread, so report the end here.
+        if self.capture_info.get("active"):
+            self.capture_info = inactive_capture_info()
+            self.emit_capture_info()
+
+    def on_capture_info(self, thread, info):
+        """Live capture facts from the capture thread (queued). Facts from a
+        thread that was already replaced are dropped: after a quick restart
+        its last messages arrive late and would overwrite the new session's
+        device, mode and note."""
+        if thread is not self.audio_thread or not isinstance(info, dict):
+            return
+        self.capture_info = info
+        self.emit_capture_info()
+
+    def emit_capture_info(self):
+        self.bridge.captureInfoChanged.emit(json.dumps(self.capture_info))
+
+    # ── Capture device ────────────────────────────────────────────────
+    def set_capture_device(self, value):
+        name = coerce_capture_device(value)
+        if name != self.capture_device:
+            self.capture_device = name
+            self.settings["capture_device"] = name
+            self._queue_settings_save()
+            # Only a system capture uses the device. Per-app capture (also
+            # one that fell back to system audio) restarts too when the
+            # thread reports system, so the choice applies right away.
+            if self.audio_thread.target_pid is None \
+                    or self.capture_info.get("source") == "system":
+                self._restart_capture_if_active()
+        # Answer with the last enumerated list: applying a profile calls this
+        # setter every time, and re-enumerating on the GUI thread for each
+        # call would buy nothing (the dropdown refreshes when opened).
+        self.emit_capture_devices(refresh=False)
+
+    def emit_capture_devices(self, refresh=True):
+        """Push the capturable output devices and the saved choice.
+
+        refresh=True enumerates (GUI thread, about 5 to 9 ms here); only
+        initial data and refresh_capture_devices do that, never anything
+        periodic. refresh=False reuses the last list, enumerating only if
+        there is none yet."""
+        if refresh or self._capture_devices is None:
+            self._capture_devices = list_capture_devices()
+        self.bridge.captureDevicesChanged.emit(json.dumps(
+            capture_devices_payload(self._capture_devices, self.capture_device)))
 
     def on_overlay_position_changed(self, x: int, y: int):
         self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
@@ -974,6 +1058,7 @@ class AudioRadarApp(QMainWindow):
             "monitor": self.selected_monitor,
             "mono_enabled": self.mono_enabled,
             "mono_device": self.mono_device or "",
+            "capture_device": self.capture_device,
             "accent_color": self.accent_color,
             "thickness": self.stroke_width,
             **self._look_values(),
@@ -1039,6 +1124,7 @@ class AudioRadarApp(QMainWindow):
         pid, name = self._resolve_target()
         self.audio_thread.set_target(pid, name)
         self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
+        self.audio_thread.set_capture_device(self.capture_device)
         self._apply_audio_settings_to_thread()
 
         if not self.audio_thread.isRunning():

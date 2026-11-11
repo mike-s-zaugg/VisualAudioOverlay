@@ -173,8 +173,27 @@ body::before {
 }
 .icon--rot { transform: rotate(90deg); }
 
-.device-name { font-size: 15px; margin-bottom: 4px; }
 .device-sub { font-size: 14px; color: var(--text-dim); }
+
+/* Audio Device status under its select. Layout only: the text is .device-sub
+   and the 4px gap is the one the old device name line had. The fixed-height
+   card has room for one line, built from parts (see captureStatus in
+   script.js): --keep is never cut, --cut ends in an ellipsis when the line is
+   full. Full text in the title.
+   white-space: pre keeps the space each part ends with. */
+.capture-status {
+    margin-top: 4px;
+    display: flex;
+    overflow: hidden;
+}
+.capture-part {
+    min-width: 0;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.capture-part--keep { flex: none; max-width: 100%; }
+.capture-part--cut { flex: 0 1 auto; }
 
 /* ── Mono output toggle + setup ────────────────────────────────── */
 .switch {
@@ -212,6 +231,17 @@ body::before {
    its multi-step setup lives in a modal so the card never clips. */
 .mono-setup-link { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .mono-setup-link:hover { text-decoration: underline; }
+
+/* Layout only. The Audio Device select left one line for this hint, so the
+   state ("On - <device>") ends in an ellipsis instead of wrapping, and Setup
+   always stays visible after it. */
+#mono-hint { display: flex; align-items: baseline; white-space: nowrap; }
+.mono-hint-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#mono-hint .mono-setup-link { flex: none; }
+
+/* The HARDWARE card is full to its fixed height: the last field's bottom
+   margin would only add scrollable overflow below the padding. */
+.card--hardware .field:last-child { margin-bottom: 0; }
 
 .mono-status { line-height: 1.35; font-size: 13px; margin: 4px 0 8px; }
 .mono-status .ok { color: #1FCB4F; }

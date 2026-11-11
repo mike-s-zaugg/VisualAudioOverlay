@@ -50,8 +50,9 @@ radar overlay that floats over your game on your main screen.
   Windows "mono audio" setting (which would otherwise blind the overlay). Needs a
   one-time virtual-cable setup; see [Mono output](#mono-output-single-sided-listeners).
 - **Smart audio boost.** Amplifies quiet, distant sounds so faint cues still register.
-- **Stereo and surround.** 7.1 / multi-channel headsets unlock 360 degree front/back
-  detection; stereo headsets run in left/right mode automatically.
+- **Stereo and surround.** Full 360 degree direction (quad, 5.1 and 7.1, including
+  the side speakers) when Windows sees the output device as surround; otherwise
+  left/right. Choose the device to listen to under **Audio Device**.
 - **Saveable presets.** Store a full per-game setup - sensitivities, filters, the
   captured program, monitor, mono output, and radar look - and switch in one click.
 - **Full customization.** Pick the radar's accent color and line thickness, with a
@@ -66,9 +67,12 @@ headphones) and analyzes the balance between channels to estimate the direction
 of each sound. That direction is drawn as an arc on the radar. Because it only
 reads audio you are already playing, there is no interaction with the game itself.
 
-> **Note on detection range:** front/back separation depends on your headset. A
-> true 7.1 / 8-channel device enables full 360 degree detection. A stereo device
-> can only resolve left vs. right.
+> **Note on detection range:** full 360 degree detection needs an output device
+> that Windows sees as 5.1 or 7.1 (Sound settings, speaker setup). Many "7.1"
+> headsets present themselves to Windows as stereo, and a stereo device can only
+> resolve left vs. right. You can choose which device the radar listens to under
+> **Audio Device**. Per-app capture is always stereo; pick **All (system audio)**
+> for 360 degrees.
 
 ## Getting started (from source)
 

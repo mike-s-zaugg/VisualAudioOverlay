@@ -41,6 +41,21 @@
  *                                  capturing, can_choose}, every key optional
  *   The hotkey starts or stops the radar like the Start/End button; the result
  *   arrives through the normal statusChanged.
+ *
+ * Capture device (guarded: an older backend keeps the deviceChanged text):
+ *   set_capture_device(str)     - output device to listen to, by name; "" follows
+ *                                 the Windows default
+ *   refresh_capture_devices()   - re-enumerate; the answer is captureDevicesChanged
+ *   captureDevicesChanged(json) - {devices: [{name, channels, is_default}],
+ *                                  selected, available}
+ *   captureInfoChanged(json)    - {active, source, device, channels, layout, mode,
+ *                                  note, note_short, mono_paused}; once the backend
+ *                                  has it, it owns the status line and
+ *                                  deviceChanged is ignored. The full note sits
+ *                                  in the title; note_short is accepted but not
+ *                                  shown (the radar words must stay whole), and
+ *                                  mono_paused turns the Mono Output hint to Paused
+ *   Every key optional. Profiles store the choice as capture_device.
  * ═══════════════════════════════════════════════════════════════════════
  */
 
@@ -78,6 +93,13 @@ function initBridge() {
             if (bridge.appearanceChanged) bridge.appearanceChanged.connect(onAppearanceChanged);
             if (bridge.audioSettingsChanged) bridge.audioSettingsChanged.connect(onAudioSettingsChanged);
             if (bridge.selectedPresetChanged) bridge.selectedPresetChanged.connect(onSelectedPresetChanged);
+            // Capture device. Without these signals (older backend) the select only
+            // offers Windows default and deviceChanged keeps writing the status line.
+            if (bridge.captureDevicesChanged) bridge.captureDevicesChanged.connect(onCaptureDevicesChanged);
+            if (bridge.captureInfoChanged) {
+                captureInfoOwnsStatus = true;
+                bridge.captureInfoChanged.connect(onCaptureInfoChanged);
+            }
             // Toggle hotkey. An older backend has neither the signal nor the slot,
             // so the Hotkey row would only show a sample binding: hide it instead.
             if (bridge.hotkeyChanged && typeof bridge.set_toggle_hotkey === "function") {
@@ -124,15 +146,33 @@ function onUpdateAvailable(version, url) {
 // hotkey and the backend itself all end in this signal.
 function onStatusChanged(message, isActive) {
     radarActive = isActive;
+    // Python announces a start before the capture thread reports, so the status
+    // line says "Starting..." until a captureInfoChanged arrives (see
+    // refreshCaptureStatus). A stop forgets what arrived. So does a start that
+    // follows an ended capture: a device or program change restarts the
+    // capture as "active false", this statusChanged, then "active true".
+    if (!isActive || (captureInfoSinceStart && !(captureInfoLast && captureInfoLast.active === true))) {
+        captureInfoSinceStart = false;
+    }
     setText("status-text", message);
     syncToggleUI();
+    refreshCaptureStatus();
 }
 
+// Older backends only: label is "Name  (Nch)". Once captureInfoChanged exists it
+// owns the status line, so this is ignored then.
 function onDeviceChanged(label) {
-    // label is "Name  (Nch)" - split the channel suffix onto its own line
-    const m = label.match(/^(.*?)\s*\((.*)\)\s*$/);
-    if (m) { setText("device-name", m[1].trim()); setText("device-channels", m[2].trim()); }
-    else { setText("device-name", label); setText("device-channels", ""); }
+    if (captureInfoOwnsStatus || typeof label !== "string") return;
+    const text = deviceLabelText(label);
+    renderCaptureStatus([{ text, fit: "cut" }], text);
+}
+
+// "Speakers (Realtek(R) Audio)  (2ch)" -> "2 ch: Speakers (Realtek(R) Audio)".
+// Channels first, since a long name ends in an ellipsis. Only a trailing
+// "(N ch)" counts as the channel suffix, so brackets in the name stay put.
+function deviceLabelText(label) {
+    const m = String(label).match(/^(.*?)\s*\((\d+)\s*ch\)\s*$/);
+    return m ? `${m[2]} ch: ${m[1].trim()}` : String(label).trim();
 }
 
 function onMonitorsChanged(jsonStr) {
@@ -275,21 +315,15 @@ function onMonoStateChanged(jsonStr) {
     if (cb) cb.checked = !!s.enabled;
 
     // Compact hint shown in the HARDWARE card (the full setup lives in the modal).
-    const hint = document.getElementById("mono-hint");
-    if (hint) {
-        const where = s.selected || (s.default ? "default device" : "default");
-        const state = s.enabled ? `On - ${where}` : "Off";
-        hint.innerHTML =
-            `${state} <a href="#" class="mono-setup-link" ` +
-            `onclick="AR.openMonoSetup(); return false;">Setup</a>`;
-    }
+    monoStateLast = s;
+    renderMonoHint();
 
     // Cable status + install button live in the modal (which scrolls, so no clip).
     const status = document.getElementById("mono-status");
     const installBtn = document.getElementById("mono-install-btn");
     if (s.cable) {
         if (status) status.innerHTML =
-            `<span class="ok">Virtual cable detected:</span> ${s.cable}`;
+            `<span class="ok">Virtual cable detected:</span> ${escapeHtml(s.cable)}`;
         if (installBtn) installBtn.classList.add("is-hidden");
     } else {
         if (status) status.innerHTML =
@@ -297,6 +331,255 @@ function onMonoStateChanged(jsonStr) {
             `route your game's audio without hearing it twice.`;
         if (installBtn) installBtn.classList.remove("is-hidden");
     }
+}
+
+// ── Capture device (HARDWARE card) ─────────────────────────────────────
+// The select picks the output VAO listens to, by name ("" = follow the Windows
+// default). The line under it says what is being captured and whether the radar
+// shows full 360 or only left and right. The card has room for that one line
+// only (183 px wide), so the visible text stays short and the title carries the
+// full explanation plus Python's note.
+
+let captureInfoOwnsStatus = false;   // backend sends captureInfoChanged
+let captureDevices = [];             // last device list from captureDevicesChanged
+let captureSelected = "";            // the saved choice ("" = Windows default)
+let captureDevicesSig = null;        // last list + choice put into the select
+
+const CAPTURE_TEXT = {
+    windowsDefault: "Windows default",
+    defaultTitle: "Windows default. Follows the sound output set in Windows.",
+    isDefault: "default",
+    notConnected: "Not connected",
+    stopped: "Starts when the radar runs.",
+    starting: "Starting...",          // radar on, the capture has not reported yet
+    notListening: "Not listening.",   // radar on, but the capture ended
+    listening: "Listening.",
+    program: "This program",
+    // Second half of the visible line.
+    full: "Full 360.",
+    leftRight: "Left and right only.",
+    waiting: "Waiting for surround.",
+    noDirection: "No direction.",
+};
+// The same, spelled out for the title.
+const CAPTURE_TITLE = {
+    full: "The radar shows full 360 direction.",
+    leftRight: "The radar shows left and right only.",
+    waiting: "No surround sound yet, so the radar shows left and right for now.",
+    noDirection: "Mono sound has no direction, so every sound shows in front.",
+};
+// head: visible name, short: name before "Waiting for surround.", word: name in
+// the title ("Receiving 7.1 sound."), multi: has surround channels. Unknown
+// layouts fall back to the channel count.
+const CAPTURE_LAYOUTS = {
+    mono: { head: "Mono", short: "Mono", word: "mono", multi: false },
+    stereo: { head: "Stereo", short: "Stereo", word: "stereo", multi: false },
+    quad: { head: "Quad", short: "Quad", word: "quad", multi: true },
+    "5.1": { head: "5.1 surround", short: "5.1", word: "5.1", multi: true },
+    "6.1": { head: "6.1 surround", short: "6.1", word: "6.1", multi: true },
+    "7.1": { head: "7.1 surround", short: "7.1", word: "7.1", multi: true },
+};
+
+// A JSON string or object as a plain object, or null. Never throws.
+function parseCapturePayload(raw) {
+    let p = raw;
+    if (typeof raw === "string") {
+        try { p = JSON.parse(raw); } catch (e) { return null; }
+    }
+    return p && typeof p === "object" && !Array.isArray(p) ? p : null;
+}
+
+// A positive whole channel count, else 0 (true, "8", 2.5 and junk are 0).
+function captureChannels(v) {
+    return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;
+}
+
+// Option text, e.g. "SteelSeries Sonar - Gaming (8 ch)" or "Speakers (2 ch, default)".
+function captureDeviceLabel(d) {
+    const extra = [];
+    const ch = captureChannels(d.channels);
+    if (ch) extra.push(`${ch} ch`);
+    if (d.is_default === true) extra.push(CAPTURE_TEXT.isDefault);
+    return extra.length ? `${d.name} (${extra.join(", ")})` : d.name;
+}
+
+// Options for the select: Windows default first, then the devices in the order
+// Python sent them, then the saved choice if it is not among them right now
+// ("Not connected: <name>", so the player sees the choice is kept).
+// Membership in the list decides "not connected", so it also covers a payload
+// whose `available` flag is missing.
+function captureDeviceOptions(devices, selected) {
+    const sel = typeof selected === "string" ? selected : "";
+    const opts = [{ value: "", label: CAPTURE_TEXT.windowsDefault }];
+    const seen = new Set([""]);
+    for (const d of Array.isArray(devices) ? devices : []) {
+        if (!d || typeof d.name !== "string" || d.name === "" || seen.has(d.name)) continue;
+        seen.add(d.name);
+        opts.push({ value: d.name, label: captureDeviceLabel(d) });
+    }
+    // Marker first: the closed select cuts long names, and this must show.
+    if (!seen.has(sel)) opts.push({ value: sel, label: `${CAPTURE_TEXT.notConnected}: ${sel}` });
+    return { opts, selected: sel };
+}
+
+function onCaptureDevicesChanged(raw) {
+    const p = parseCapturePayload(raw);
+    if (!p) return;
+    if (Array.isArray(p.devices)) captureDevices = p.devices;
+    if (typeof p.selected === "string") captureSelected = p.selected;
+    renderCaptureDevices();
+}
+
+// Put the device list into the select. Identical lists arrive on every refresh
+// (each time the dropdown opens), so an unchanged list with the right value
+// showing is skipped; anything else goes through fillSelect, which waits while
+// the popup is open (see isSelectOpen).
+function renderCaptureDevices() {
+    const { opts, selected } = captureDeviceOptions(captureDevices, captureSelected);
+    const sel = document.getElementById("capture-device-select");
+    const sig = JSON.stringify([opts, selected]);
+    if (sig === captureDevicesSig && sel && sel.value === selected) return;
+    captureDevicesSig = sig;
+    fillSelect("capture-device-select", opts, selected);
+}
+
+// The closed select cuts long names, so its title holds the full choice.
+// Registered as the select's settled hook, so it also runs after a deferred fill.
+function syncCaptureSelectTitle() {
+    const sel = document.getElementById("capture-device-select");
+    if (!sel || !sel.setAttribute) return;
+    const opt = sel.options && sel.options[sel.selectedIndex];
+    const title = !opt || opt.value === "" ? CAPTURE_TEXT.defaultTitle : opt.textContent;
+    sel.setAttribute("title", title);
+}
+
+// {parts, text, title} for the status line. Pure, never throws. A payload
+// replaces the previous one: a missing note means no note, a missing `active`
+// means not capturing. `radarRunning` is the radar state from statusChanged.
+//
+// The line is 183 px, so it is built from parts that say what may be cut:
+//   keep  never cut (what the radar can show)
+//   cut   shortened with an ellipsis when the line is full (layout, program)
+// The full `note` sentence is always in the title. note_short is not shown:
+// measured in the real font, a short note plus the radar words does not fit
+// ("Mono output paused. Full 360." is 190 px), and the radar words must stay
+// whole. Its two cases show elsewhere: Paused in the Mono Output hint and
+// "Not connected: <name>" in the select.
+function captureStatus(raw, radarRunning) {
+    const p = parseCapturePayload(raw) || {};
+    const note = typeof p.note === "string" ? p.note.trim() : "";
+    const done = (parts, title) => ({ parts, text: parts.map(x => x.text).join(" "), title });
+
+    if (p.active !== true) {
+        const idle = radarRunning === true ? CAPTURE_TEXT.notListening : CAPTURE_TEXT.stopped;
+        return done([{ text: idle, fit: "keep" }], note);
+    }
+
+    const isApp = p.source === "app";
+    const device = typeof p.device === "string" ? p.device.trim() : "";
+    const ch = captureChannels(p.channels);
+    const layout = typeof p.layout === "string" && Object.prototype.hasOwnProperty.call(CAPTURE_LAYOUTS, p.layout)
+        ? CAPTURE_LAYOUTS[p.layout]
+        : ch === 1 ? CAPTURE_LAYOUTS.mono
+        : ch === 2 ? CAPTURE_LAYOUTS.stereo
+        : ch > 2 ? { head: `${ch} ch`, short: `${ch} ch`, word: `${ch} channel`, multi: true }
+        : null;
+
+    // What the radar can show right now.
+    let kind = "";
+    if (p.mode === "surround") kind = "full";
+    else if (layout === CAPTURE_LAYOUTS.mono) kind = "noDirection";
+    else if (layout && layout.multi) kind = "waiting";
+    else if (layout || p.mode === "stereo") kind = "leftRight";
+
+    let head;
+    if (isApp) head = device || CAPTURE_TEXT.program;
+    else if (!layout) head = "";
+    else head = kind === "waiting" ? layout.short : layout.head;
+
+    const radar = kind ? CAPTURE_TEXT[kind] : "";
+    const parts = [];
+    if (head) parts.push({ text: `${head}.`, fit: radar ? "cut" : "keep" });
+    if (radar) parts.push({ text: radar, fit: "keep" });
+    if (!parts.length) parts.push({ text: CAPTURE_TEXT.listening, fit: "keep" });
+
+    const titleParts = [];
+    if (device) titleParts.push(`Listening to ${device}.`);
+    else if (isApp) titleParts.push("Listening to one program.");
+    if (layout) titleParts.push(`Receiving ${layout.word} sound.`);
+    if (kind) titleParts.push(CAPTURE_TITLE[kind]);
+    if (note) titleParts.push(note);
+    const s = done(parts, "");
+    s.title = titleParts.join(" ") || s.text;
+    return s;
+}
+
+// Last captureInfoChanged payload, re-read when the radar starts or stops.
+let captureInfoLast = null;
+// A payload arrived while the radar was active, since it last started.
+let captureInfoSinceStart = false;
+
+function onCaptureInfoChanged(raw) {
+    captureInfoOwnsStatus = true;
+    const p = parseCapturePayload(raw);
+    if (!p) return;                             // junk: keep what is showing
+    captureInfoLast = p;
+    if (radarActive) captureInfoSinceStart = true;
+    monoPaused = p.mono_paused === true;
+    monoPausedNote = typeof p.note === "string" ? p.note.trim() : "";
+    renderMonoHint();
+    refreshCaptureStatus();
+}
+
+// Repaint the status line from the last capture info and the radar state:
+// stopped, "Starting..." until the capture reports, then its status, or
+// "Not listening." once it reports that it ended. Event driven, no timers.
+// Leaves the line to deviceChanged on an older backend.
+function refreshCaptureStatus() {
+    if (!captureInfoOwnsStatus) return;
+    if (radarActive && !captureInfoSinceStart) {
+        renderCaptureStatus([{ text: CAPTURE_TEXT.starting, fit: "keep" }], "");
+        return;
+    }
+    const s = captureStatus(captureInfoLast, radarActive);
+    renderCaptureStatus(s.parts, s.title);
+}
+
+// One span per part (see captureStatus); the trailing space is part of the
+// span text, so the words sit exactly as in plain text.
+function renderCaptureStatus(parts, title) {
+    const el = document.getElementById("capture-status");
+    if (!el) return;
+    el.innerHTML = parts.map((x, i) =>
+        `<span class="capture-part capture-part--${x.fit}">` +
+        `${escapeHtml(x.text)}${i < parts.length - 1 ? " " : ""}</span>`).join("");
+    setAttr("capture-status", "title", title);
+}
+
+// The Mono Output hint in the HARDWARE card: "Off", "On - <device>", or "Paused"
+// while Python's mono feedback guard blocks mono playback (mono_paused in
+// captureInfoChanged). One line: a long device name ends in an ellipsis (full
+// text in the title) so Setup stays visible and the fixed-height card never clips.
+let monoStateLast = null;   // last monoStateChanged payload
+let monoPaused = false;     // mono_paused from the last captureInfoChanged
+let monoPausedNote = "";    // the note that came with it
+
+function renderMonoHint() {
+    const s = monoStateLast;
+    const hint = document.getElementById("mono-hint");
+    if (!s || !hint) return;
+    const where = s.selected || (s.default ? "default device" : "default");
+    let state = s.enabled ? `On - ${where}` : "Off";
+    let title = state;
+    // Only while mono is on: with the switch off, "Paused" would contradict it.
+    if (monoPaused && s.enabled) {
+        state = "Paused";
+        title = monoPausedNote || "Mono output is paused.";
+    }
+    hint.innerHTML =
+        `<span class="mono-hint-state" title="${escapeAttr(title)}">${escapeHtml(state)}</span> ` +
+        `<a href="#" class="mono-setup-link" ` +
+        `onclick="AR.openMonoSetup(); return false;">Setup</a>`;
 }
 
 function onOverlayPositionChanged(jsonStr) {
@@ -650,6 +933,7 @@ window.AR = {
             // state, and overlay appearance, so "CS2" restores everything.
             program: strVal("program-select", "all"),
             monitor: intVal("monitor-select", 0),
+            capture_device: strVal("capture-device-select", ""),   // "" = Windows default
             mono_enabled: !!document.getElementById("mono-enabled")?.checked,
             mono_device: strVal("mono-output-select", ""),
             accent_color: strVal("accent-color", "#9751F2"),
@@ -691,6 +975,20 @@ window.AR = {
         // game shows up even if it started playing after the app launched.
         if (bridge.refresh_programs) bridge.refresh_programs();
     },
+
+    // ── Capture device ─────────────────────────────────────────────
+    // A name, or "" for the Windows default. Python answers with
+    // captureDevicesChanged and captureInfoChanged.
+    setCaptureDevice(value) {
+        const name = value == null ? "" : String(value);
+        captureSelected = name;
+        callBridge("set_capture_device", name);
+        syncCaptureSelectTitle();
+    },
+
+    // Re-enumerate when the dropdown is about to open, like the Program select,
+    // so a device plugged in since shows up. The answer waits while it is open.
+    refreshCaptureDevices() { callBridge("refresh_capture_devices"); },
 
     // ── Mono output ────────────────────────────────────────────────
     setMonoEnabled(on) {
@@ -860,6 +1158,15 @@ function applyProfileValues(p) {
         AR.setMonitor(p.monitor);
     }
 
+    // Capture device: only a string ("" = Windows default). The select shows the
+    // choice at once, marked "not connected" when it is not plugged in;
+    // captureDevicesChanged then echoes Python's view.
+    if (typeof p.capture_device === "string") {
+        captureSelected = p.capture_device;
+        renderCaptureDevices();
+        AR.setCaptureDevice(p.capture_device);
+    }
+
     // Device before enable, so turning mono on starts on the right output.
     // monoStateChanged echoes back and re-syncs the checkbox/select/hint.
     if (p.mono_device != null && bridge.set_mono_output) {
@@ -974,6 +1281,10 @@ function updateDualFill() {
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────
+function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
 function setText(id, txt) { const el = document.getElementById(id); if (el) el.textContent = txt; }
 function toggleClass(id, cls, on) { const el = document.getElementById(id); if (el) el.classList.toggle(cls, on); }
 function intVal(id, def) { const el = document.getElementById(id); return el ? parseInt(el.value) : def; }
@@ -986,7 +1297,8 @@ const _pendingFills = {};
 // Follow-up work to run once a select's options have actually landed in the DOM.
 // Registered per id so a *deferred* fill still triggers what its caller expected
 // to happen right after the rebuild.
-const _fillSettled = { "preset-select": maybeRestorePreset };
+const _fillSettled = { "preset-select": maybeRestorePreset,
+    "capture-device-select": syncCaptureSelectTitle };
 
 // QtWebEngine draws <select> popups natively (that is why the open list is white
 // instead of following our dark CSS - the popup is a Qt widget, not DOM). Two
@@ -1113,6 +1425,8 @@ function syncMoveUI() {
 document.addEventListener("DOMContentLoaded", function () {
     // Default program option until/unless backend sends a list
     fillSelect("program-select", [{ value: "all", label: "All (system audio)" }]);
+    // Windows default only, until (or unless) the backend sends the device list
+    renderCaptureDevices();
 
     // Wire dual-range inputs
     ["freq-low", "freq-high"].forEach(id =>

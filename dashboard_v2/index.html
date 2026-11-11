@@ -37,13 +37,24 @@
                     </div>
                 </div>
 
+                <!-- Which output VAO listens to ("" = follow Windows), built like the
+                     Monitor select. The card has room for one status line under it,
+                     built from parts that say what may be cut (see captureStatus);
+                     the full text is in its title. -->
                 <div class="field">
                     <div class="field-label">
                         <img src="icons/headphone.svg" class="icon" alt="">
                         <span>Audio Device</span>
                     </div>
-                    <div id="device-name" class="device-name">No device detected</div>
-                    <div id="device-channels" class="device-sub"></div>
+                    <div class="select-wrap">
+                        <select id="capture-device-select" class="select" aria-label="Audio device"
+                            aria-describedby="capture-status"
+                            onmousedown="AR.refreshCaptureDevices()"
+                            onchange="AR.setCaptureDevice(this.value)">
+                            <option value="">Windows default</option>
+                        </select>
+                    </div>
+                    <div id="capture-status" class="device-sub capture-status" aria-live="polite"><span class="capture-part capture-part--keep">Starts when the radar runs.</span></div>
                 </div>
 
                 <!-- Mono Output (single-sided listeners). The overlay shows the
@@ -62,7 +73,7 @@
                         </label>
                     </div>
                     <div id="mono-hint" class="device-sub">
-                        Off
+                        <span class="mono-hint-state" title="Off">Off</span>
                         <a href="#" class="mono-setup-link" onclick="AR.openMonoSetup(); return false;">Setup</a>
                     </div>
                 </div>
