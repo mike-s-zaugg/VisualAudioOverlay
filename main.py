@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor, QIcon
 
 import hotkeys
 import look
+import popup_snap
 from audio_capture import AudioCaptureThread, list_capture_devices
 from capture_state import (capture_devices_payload, coerce_capture_device,
                            inactive_capture_info)
@@ -584,6 +585,10 @@ class AudioRadarApp(QMainWindow):
 
         # WebEngine view
         self.view = QWebEngineView()
+        # Dropdown popups grew by a pixel per frame at 125/150/175 % display
+        # scaling (a Qt/Chromium rounding loop): keep them on whole pixels.
+        # See popup_snap.py.
+        self._popup_snap = popup_snap.install(self.view)
 
         # WebChannel - registers `bridge` as `window.bridge` in JS
         self.channel = QWebChannel()
